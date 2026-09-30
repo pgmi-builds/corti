@@ -4,7 +4,7 @@ The 3 daily-log kinds (episode / atomic_fact / foresight)
 all do the same three-way reconcile against Postgres:
 
 1. Parse the md into structured entries.
-2. Fetch existing rows for the same ``md_path``.
+2. Fetch the content hash (and vector presence) for the same ``md_path``.
 3. ``content_sha256`` mismatch → tokenise + embed + upsert; no diff
    → skip; row gone from md → delete.
 
@@ -15,10 +15,16 @@ session_id / timestamp / parent_id / sender_ids) are NOT in the hash
 — editing them does NOT propagate to Postgres and does NOT waste an
 embed call.
 
+Embedding is **best-effort**. When the provider is unreachable the row is
+still written, with ``vector = NULL``: the memory stays readable and
+BM25-searchable, and a later pass backfills the vector. Failing the whole
+file instead would lose the record *and* — because the row then never
+reaches a terminal state — re-run the handler on every sweep.
+
 Subclasses bind their ``kind`` / ``db_repo`` / ``content_change_keys``
-as ClassVars and override :meth:`_build_row` to do the per-kind field
-mapping. Everything else — read, diff, embed call, upsert, delete —
-lives here.
+as ClassVars and override :meth:`_embed_texts` + :meth:`_build_row` to do
+the per-kind mapping. Everything else — read, diff, embed call, upsert,
+delete — lives here.
 """
 
 from __future__ import annotations
@@ -26,8 +32,11 @@ from __future__ import annotations
 import abc
 import asyncio
 import dataclasses
+import time
+from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 
+from corti.component.embedding import EmbeddingServiceError
 from corti.core.observability.logging import get_logger
 from corti.core.persistence import MarkdownReader, StructuredEntry
 
@@ -37,6 +46,40 @@ from ._common import resolve_owner, resolve_scope
 from .base import Handler
 
 logger = get_logger(__name__)
+
+
+class EmbedGuard:
+    """Cooldown gate in front of the embedding provider.
+
+    The scanner re-runs a file whenever its mtime moves, and a file holding
+    rows that still lack vectors re-attempts those embeddings on every run.
+    Without a gate, an embedder outage turns each 30 s sweep into thousands
+    of doomed HTTP calls. After a failure the gate opens for ``cooldown``
+    seconds and callers short-circuit to ``None``.
+
+    Uses :func:`time.monotonic` (not wall-clock) so a system clock change
+    cannot leave the gate stuck open.
+    """
+
+    def __init__(self, cooldown_seconds: float = 300.0) -> None:
+        self.cooldown_seconds = cooldown_seconds
+        self._open_until: float = 0.0
+
+    def is_open(self) -> bool:
+        """True while the gate is closed to traffic (provider believed down)."""
+        return time.monotonic() < self._open_until
+
+    def record_failure(self) -> None:
+        """Open the gate for one cooldown window."""
+        self._open_until = time.monotonic() + self.cooldown_seconds
+
+    def record_success(self) -> None:
+        """Close the gate — the provider answered."""
+        self._open_until = 0.0
+
+
+# Process-wide gate: every daily-log handler shares one embedding provider.
+_embed_guard = EmbedGuard()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -52,21 +95,23 @@ class ParsedEntry:
 
 
 class BaseDailyLogHandler(Handler):
-    """Common chassis for the 4 daily-log cascade handlers.
+    """Common chassis for the 3 daily-log cascade handlers.
 
     Subclass requirements:
 
     - :attr:`kind` (ClassVar[str]) — registry name, surfaces in logs.
     - :attr:`db_repo` (ClassVar) - the Postgres repo singleton for
-      this kind (must expose ``find_where`` / ``upsert`` / ``delete``
-      / ``delete_by_md_path``).
+      this kind (must expose ``find_entry_state`` / ``upsert`` /
+      ``delete`` / ``delete_by_md_path``).
     - :attr:`content_change_keys` (ClassVar[tuple[str, ...]]) — the
       subset of inline + section fields whose changes should trigger
       re-upsert + re-embed. Each key is ``"section:Name"`` or
       ``"inline:name"``.
+    - :meth:`_embed_texts` (override) — which strings this kind embeds,
+      in the order :meth:`_build_row` consumes them.
     - :meth:`_build_row` (override) — turn a :class:`ParsedEntry` plus
       common context (owner_id / owner_type / md_path) into a typed
-      Postgres row. Tokenisation + embedding live in the subclass.
+      Postgres row. Tokenisation lives in the subclass.
     """
 
     kind: ClassVar[str] = ""
@@ -107,10 +152,7 @@ class BaseDailyLogHandler(Handler):
             for entry in parsed.entries
         ]
 
-        existing = await self.db_repo.find_where(
-            f"md_path = '{_q(md_path)}'",
-            limit=10_000,
-        )
+        existing = await self.db_repo.find_entry_state(md_path)
         owner_id, owner_type = resolve_owner(parsed.frontmatter, md_path)
         app_id, project_id = resolve_scope(md_path)
 
@@ -124,9 +166,7 @@ class BaseDailyLogHandler(Handler):
             md_path,
         )
         new_by_id = {e.entry_id for e in new_entries}
-        to_delete_ids = [
-            row.entry_id for row in existing if row.entry_id not in new_by_id
-        ]
+        to_delete_ids = [entry_id for entry_id in existing if entry_id not in new_by_id]
 
         await self._apply_db_changes(to_upsert, to_delete_ids, md_path)
         await self._propagate_deprecations(
@@ -146,17 +186,25 @@ class BaseDailyLogHandler(Handler):
     @staticmethod
     def _diff_entries(
         new_entries: list[ParsedEntry],
-        existing: list[Any],
+        existing: Mapping[str, tuple[str, bool]],
     ) -> tuple[list[ParsedEntry], int]:
-        """Compare new entries against existing rows, return changed + skip count."""
-        existing_by_entry = {row.entry_id: row for row in existing}
+        """Compare new entries against existing rows, return changed + skip count.
+
+        ``existing`` maps ``entry_id -> (content_sha256, has_vector)``. A row
+        is skipped only when its content hash is unchanged **and** it already
+        carries a vector — a row whose vector is still ``NULL`` (written while
+        the embedder was down) is re-emitted so the backfill happens on the
+        next pass that can reach the provider.
+        """
         to_build: list[ParsedEntry] = []
         skipped = 0
         for entry in new_entries:
-            prior = existing_by_entry.get(entry.entry_id)
-            if prior is not None and prior.content_sha256 == entry.content_sha256:
-                skipped += 1
-                continue
+            prior = existing.get(entry.entry_id)
+            if prior is not None:
+                prior_sha, prior_has_vector = prior
+                if prior_has_vector and prior_sha == entry.content_sha256:
+                    skipped += 1
+                    continue
             to_build.append(entry)
         return to_build, skipped
 
@@ -169,9 +217,16 @@ class BaseDailyLogHandler(Handler):
         project_id: str,
         md_path: str,
     ) -> list[Any]:
-        """Build Postgres rows for changed entries (embed concurrently)."""
+        """Build Postgres rows for changed entries.
+
+        Embedding is batched (one :meth:`embed_batch` call for the whole file
+        rather than one request per entry) and best-effort: an unreachable
+        provider yields ``vector=None`` rows instead of an exception, so the
+        memories are still recorded and keyword-searchable.
+        """
         if not to_build:
             return []
+        vectors_per_entry = await self._embed_many(to_build, md_path)
         return list(
             await asyncio.gather(
                 *(
@@ -182,11 +237,77 @@ class BaseDailyLogHandler(Handler):
                         project_id=project_id,
                         md_path=md_path,
                         entry=entry,
+                        vectors=vectors,
                     )
-                    for entry in to_build
+                    for entry, vectors in zip(to_build, vectors_per_entry, strict=True)
                 )
             )
         )
+
+    async def _embed_many(
+        self,
+        entries: list[ParsedEntry],
+        md_path: str,
+    ) -> list[list[list[float] | None]]:
+        """Embed every entry's texts in one batched pass.
+
+        Returns one ``list[vector | None]`` per entry, aligned with
+        :meth:`_embed_texts`. Never raises: an unavailable provider yields
+        ``None`` for every slot.
+        """
+        texts_per_entry = [self._embed_texts(entry) for entry in entries]
+        flat = [text for texts in texts_per_entry for text in texts]
+        if not flat:
+            return [[] for _ in entries]
+
+        embedded: list[list[float] | None]
+        if _embed_guard.is_open():
+            logger.debug(
+                "cascade_embedding_guard_open_skipping_embed",
+                md_path=md_path,
+                texts=len(flat),
+            )
+            embedded = [None] * len(flat)
+        else:
+            try:
+                embedded = list(await self._deps.embedder.embed_batch(flat))
+            except EmbeddingServiceError as exc:
+                _embed_guard.record_failure()
+                logger.warning(
+                    "cascade_embedding_unavailable_keeping_rows_unvectorised",
+                    md_path=md_path,
+                    entries=len(entries),
+                    texts=len(flat),
+                    cooldown_seconds=_embed_guard.cooldown_seconds,
+                    error=str(exc),
+                )
+                embedded = [None] * len(flat)
+            else:
+                _embed_guard.record_success()
+
+        grouped: list[list[list[float] | None]] = []
+        cursor = 0
+        for texts in texts_per_entry:
+            grouped.append(embedded[cursor : cursor + len(texts)])
+            cursor += len(texts)
+        return grouped
+
+    async def _resolve_vectors(
+        self,
+        entry: ParsedEntry,
+        md_path: str,
+        vectors: Sequence[list[float] | None] | None,
+    ) -> Sequence[list[float] | None]:
+        """Return caller-supplied vectors, or embed this single entry.
+
+        The batched path (:meth:`_embed_entries`) always supplies ``vectors``;
+        this fallback keeps :meth:`_build_row` callable on its own (white-box
+        tests, one-off tooling) and degrades to ``None`` when the embedder is
+        down rather than raising.
+        """
+        if vectors is not None:
+            return vectors
+        return (await self._embed_many([entry], md_path))[0]
 
     async def _apply_db_changes(
         self,
@@ -273,6 +394,15 @@ class BaseDailyLogHandler(Handler):
             )
 
     @abc.abstractmethod
+    def _embed_texts(self, entry: ParsedEntry) -> tuple[str, ...]:
+        """Texts to embed for ``entry``, aligned with :meth:`_build_row`.
+
+        Order matters: the vector at index *i* is handed to ``_build_row``
+        as ``vectors[i]``. Return an empty tuple when the kind embeds
+        nothing for this entry.
+        """
+
+    @abc.abstractmethod
     async def _build_row(
         self,
         *,
@@ -282,6 +412,7 @@ class BaseDailyLogHandler(Handler):
         project_id: str = "default",
         md_path: str,
         entry: ParsedEntry,
+        vectors: Sequence[list[float] | None] | None = None,
     ) -> Any:
         """Subclass: build the typed Postgres row for one parsed entry.
 
@@ -289,6 +420,12 @@ class BaseDailyLogHandler(Handler):
         always supplies them (via :func:`resolve_scope`). They default to
         ``"default"`` so white-box callers exercising only the field mapping
         can omit them.
+
+        ``vectors`` is the pre-computed embedding output aligned with
+        :meth:`_embed_texts`; a ``None`` slot means "not embedded" and must be
+        written as SQL ``NULL``. When ``vectors`` is ``None`` the entry is
+        embedded on demand — subclasses should route that through
+        :meth:`_resolve_vectors`.
         """
 
 

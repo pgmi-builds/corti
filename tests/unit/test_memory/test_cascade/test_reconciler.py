@@ -54,11 +54,38 @@ def test_done_state_with_matching_mtime_is_skipped() -> None:
     assert decisions == []
 
 
-def test_pending_state_with_matching_mtime_still_emits_modified() -> None:
-    """Pending / failed states are NOT terminal — re-emit so worker re-runs."""
+def test_pending_state_is_skipped_while_queued() -> None:
+    """Already queued — the worker re-reads the md, so re-emit adds nothing."""
     decisions = reconcile(
         [_scan("a.md", mtime=1.0)],
         state={"a.md": _state("a.md", mtime=1.0, status="pending")},
+    )
+    assert decisions == []
+
+
+def test_processing_state_is_skipped_while_in_flight() -> None:
+    """In flight — re-emitting every sweep schedules duplicate handler runs."""
+    decisions = reconcile(
+        [_scan("a.md", mtime=2.0)],
+        state={"a.md": _state("a.md", mtime=1.0, status="processing")},
+    )
+    assert decisions == []
+
+
+def test_failed_state_with_unchanged_mtime_is_not_retried() -> None:
+    """A terminal ``failed`` row must stay visible to ``cascade fix``."""
+    decisions = reconcile(
+        [_scan("a.md", mtime=1.0)],
+        state={"a.md": _state("a.md", mtime=1.0, status="failed")},
+    )
+    assert decisions == []
+
+
+def test_failed_state_with_new_mtime_is_retried() -> None:
+    """The md was edited after the failure — retry it."""
+    decisions = reconcile(
+        [_scan("a.md", mtime=2.0)],
+        state={"a.md": _state("a.md", mtime=1.0, status="failed")},
     )
     assert [(d.md_path, d.change_type) for d in decisions] == [("a.md", "modified")]
 

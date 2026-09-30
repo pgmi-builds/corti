@@ -19,9 +19,13 @@ Three categories per 12 doc §5.3:
   drop, daemon restart window), and we need the scanner to recover
   the deletion or Postgres stays stale.
 
-Paths whose prior state row is ``done`` AND the mtime matches are
-skipped on the add/modify side — the reconcile output stays tight on
-quiet sweeps.
+Paths are skipped on the add/modify side in two cases — the reconcile
+output stays tight on quiet sweeps, and a busy sweep cannot feed itself:
+
+- the prior row is ``pending`` / ``processing`` — the work is already
+  queued, and the worker reads the md when it runs, so a re-enqueue would
+  only reset the row and schedule a duplicate run;
+- the prior row is ``done`` AND the mtime matches — nothing changed.
 """
 
 from __future__ import annotations
@@ -81,8 +85,20 @@ def reconcile(
                 )
             )
             continue
-        # Skip when the row is already done and mtime hasn't moved.
-        if prior.status == "done" and prior.mtime == item.mtime:
+        # Already queued or in flight — the worker re-reads the md when it
+        # runs, so re-enqueueing adds no information; it only resets the row to
+        # ``pending`` and schedules a duplicate run. When a handler takes
+        # longer than the scan interval that becomes self-sustaining: every
+        # sweep re-points the row at a handler that is still running, and each
+        # pass redoes the work.
+        if prior.status in ("pending", "processing"):
+            continue
+        # Terminal state with nothing new on disk. ``done`` is the quiet-sweep
+        # case; ``failed`` must stay observable to ``cascade fix`` rather than
+        # being silently retried on every sweep. A file that changed *during* a
+        # run is still picked up — its stored mtime is stale, so the first
+        # sweep after the run completes emits ``modified``.
+        if prior.mtime == item.mtime:
             continue
         decisions.append(
             ReconcileDecision(

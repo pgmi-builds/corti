@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import typer
 
-from .commands import config_cmd, demo, init_cmd, integrations, server
+from .commands import cascade, config_cmd, demo, init_cmd, integrations, server
 
 app = typer.Typer(
     name="corti",
@@ -28,7 +28,7 @@ app = typer.Typer(
 integrations.auto_detect_and_install()
 
 app.add_typer(server.app, name="server")
-# cascade imported lazily when the command is invoked
+app.add_typer(cascade.app, name="cascade")
 app.add_typer(config_cmd.app, name="config")
 app.add_typer(integrations.app, name="integrations")
 

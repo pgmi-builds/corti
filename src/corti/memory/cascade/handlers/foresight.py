@@ -26,6 +26,8 @@ md contract:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from corti.infra.persistence.pg import Foresight, ParentType, foresight_repo
 
 from ._common import (
@@ -54,6 +56,9 @@ class ForesightHandler(BaseDailyLogHandler):
     (owner_id / session_id / timestamp / parent_id / sender_ids) is
     excluded — changes there don't propagate."""
 
+    def _embed_texts(self, entry: ParsedEntry) -> tuple[str, ...]:
+        return (entry.structured.sections.get("Foresight", "").strip(),)
+
     async def _build_row(
         self,
         *,
@@ -63,12 +68,13 @@ class ForesightHandler(BaseDailyLogHandler):
         project_id: str = "default",
         md_path: str,
         entry: ParsedEntry,
+        vectors: Sequence[list[float] | None] | None = None,
     ) -> Foresight:
         s = entry.structured
         text = s.sections.get("Foresight", "").strip()
         evidence = (s.sections.get("Evidence") or "").strip() or None
         tokens = self._deps.tokenizer.tokenize(text)
-        vector = await self._deps.embedder.embed(text)
+        (vector,) = await self._resolve_vectors(entry, md_path, vectors)
         evidence_tokens = (
             " ".join(self._deps.tokenizer.tokenize(evidence)) if evidence else None
         )

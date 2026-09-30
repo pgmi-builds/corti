@@ -32,4 +32,4 @@ class AtomicFact(PgBaseModel):
     md_path: str
     content_sha256: str
     deprecated_by: str | None = None
-    vector: list[float] = []
+    vector: list[float] | None = None

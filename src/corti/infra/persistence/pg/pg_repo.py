@@ -150,6 +150,10 @@ class PgRepoBase:
 
         Vector fields and jsonb fields are serialised to their PG text format.
         Server-managed and generated columns are excluded.
+        ``None`` on a vector field is written as SQL ``NULL``. That is the
+        sentinel for "embedding not computed yet" (see ``ddl.py``) and is
+        deliberately *not* coerced to a zero-vector, which would corrupt
+        cosine distance instead of merely hiding the row.
         Empty vectors are replaced with a 1024-dim zero-vector — pgvector rejects
         ``[]`` with "must have at least 1 dimension".
         """
@@ -321,6 +325,48 @@ class PgRepoBase:
             cur = await conn.execute(sql)
             rows = await cur.fetchall()
         return [self._row_to_model(_clean_row_dict(r)) for r in rows]
+
+    async def find_entry_state(self, md_path: str) -> dict[str, tuple[str, bool]]:
+        """``entry_id -> (content_sha256, has_vector)`` for one ``md_path``.
+
+        The cascade's md-vs-Postgres diff needs only the content hash, plus
+        whether a vector exists yet so rows written while the embedder was
+        down can be backfilled. Selecting whole rows instead would pull one
+        1024-d vector per entry: a single daily log can hold 10K+ entries.
+
+        Returns **every** row for ``md_path`` with no limit. A capped fetch
+        silently hides the tail of large daily logs, and every hidden entry
+        then looks "new" on each pass and is re-embedded forever.
+        """
+        pool = await self._pool()
+        sql = (
+            f"SELECT entry_id, content_sha256, (vector IS NOT NULL) AS has_vector "
+            f"FROM {self.table_name} WHERE md_path = %s"
+        )
+        async with pool.connection() as conn:
+            cur = await conn.execute(sql, (md_path,))
+            rows = await cur.fetchall()
+        return {
+            row["entry_id"]: (row["content_sha256"], bool(row["has_vector"]))
+            for row in rows
+        }
+
+    async def find_md_paths_missing_vectors(self) -> list[str]:
+        """Distinct ``md_path`` values holding at least one vectorless row.
+
+        Drives ``corti cascade backfill``. A row written while the embedder
+        was down carries ``vector = NULL``; because its content hash is
+        already current, neither the watcher nor the scanner will revisit the
+        file — a frozen daily log never changes again, so its missing vectors
+        would stay missing forever. Re-enqueueing these paths makes the
+        daily-log handler re-run and embed the gaps.
+        """
+        pool = await self._pool()
+        sql = f"SELECT DISTINCT md_path FROM {self.table_name} WHERE vector IS NULL"
+        async with pool.connection() as conn:
+            cur = await conn.execute(sql)
+            rows = await cur.fetchall()
+        return [row["md_path"] for row in rows]
 
     async def find_one_where(self, where: str) -> T | None:
         """Single-row variant of ``find_where`` (``None`` if no match)."""

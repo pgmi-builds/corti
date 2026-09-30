@@ -15,12 +15,12 @@ from typing import Any
 
 import pytest
 
-from corti.component.embedding import EmbeddingProvider
+from corti.component.embedding import EmbeddingProvider, EmbeddingServiceError
 from corti.component.tokenizer import Tokenizer
 from corti.core.persistence import MemoryRoot
 from corti.infra.persistence.markdown import EpisodeWriter
 from corti.infra.persistence.pg import Episode
-from corti.memory.cascade.handlers import HandlerDeps
+from corti.memory.cascade.handlers import HandlerDeps, _daily_log_base
 from corti.memory.cascade.handlers.episode import EpisodeHandler
 
 
@@ -65,6 +65,14 @@ class _FakeEpisodeRepo:
             md_path = where[len(prefix) :].rstrip("'")
             return [r for r in self.rows if r.md_path == md_path]
         return []
+
+    async def find_entry_state(self, md_path: str) -> dict[str, tuple[str, bool]]:
+        """Mirror ``PgRepoBase.find_entry_state`` over the fake's row list."""
+        return {
+            r.entry_id: (r.content_sha256, r.vector is not None)
+            for r in self.rows
+            if r.md_path == md_path
+        }
 
     async def upsert(self, rows: list[Episode]) -> None:
         self.upserts.append(list(rows))
@@ -289,6 +297,70 @@ async def test_missing_timestamp_raises_value_error(
     handler, _embedder = _build_handler(memory_root)
     with pytest.raises(ValueError, match="timestamp"):
         await handler.handle_added_or_modified(rel)
+
+
+# ── embedding best-effort ────────────────────────────────────────────────
+
+
+class _FailingEmbedder(EmbeddingProvider):
+    """Always raises — simulates an unreachable embedder."""
+
+    dim = 1024
+
+    async def embed(self, text: str) -> list[float]:
+        raise EmbeddingServiceError("embedding service down")
+
+    async def embed_batch(self, texts):  # type: ignore[no-untyped-def]
+        raise EmbeddingServiceError("embedding service down")
+
+
+async def test_embedder_down_still_writes_row_without_vector(
+    memory_root: MemoryRoot,
+    fake_repo: _FakeEpisodeRepo,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A vector outage must not lose the memory — write it, backfill later."""
+    # The cooldown gate is process-wide; give this test a private one.
+    monkeypatch.setattr(_daily_log_base, "_embed_guard", _daily_log_base.EmbedGuard())
+    writer = EpisodeWriter(memory_root)
+    rel = await _write_one_entry(writer, "u1", "hello world")
+
+    deps = HandlerDeps(
+        memory_root=memory_root,
+        embedder=_FailingEmbedder(),
+        tokenizer=_StubTokenizer(),
+    )
+    outcome = await EpisodeHandler(deps).handle_added_or_modified(rel)
+
+    assert outcome.upserted == 1
+    assert outcome.skipped == 0
+    row = fake_repo.upserts[0][0]
+    assert row.vector is None
+    assert row.subject_vector is None
+    # The BM25 side is untouched — the row stays keyword-searchable.
+    assert row.episode_tokens == "hello world Test"
+
+
+async def test_vectorless_row_is_reembedded_on_next_pass(
+    memory_root: MemoryRoot, fake_repo: _FakeEpisodeRepo
+) -> None:
+    """A row whose vector is still NULL is re-emitted so it gets backfilled."""
+    writer = EpisodeWriter(memory_root)
+    rel = await _write_one_entry(writer, "u1", "hello world")
+
+    handler, embedder = _build_handler(memory_root)
+    await handler.handle_added_or_modified(rel)
+    # Simulate a row written while the embedder was down.
+    fake_repo.rows[0] = fake_repo.rows[0].model_copy(update={"vector": None})
+    fake_repo.upserts.clear()
+    embedder.calls = 0
+
+    outcome = await handler.handle_added_or_modified(rel)
+
+    assert outcome.upserted == 1
+    assert outcome.skipped == 0
+    assert embedder.calls == 2
+    assert fake_repo.upserts[0][0].vector is not None
 
 
 # ── unused noqa suppressor (keep imports tidy) ──────────────────────────

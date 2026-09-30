@@ -19,6 +19,8 @@ md contract (md writer + cascade share this shape):
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from corti.infra.persistence.pg import AtomicFact, ParentType, atomic_fact_repo
 
 from ._common import parse_inline_list, require_iso_timestamp
@@ -34,6 +36,9 @@ class AtomicFactHandler(BaseDailyLogHandler):
     """Only ``Fact`` matters — it's both the embedded text AND the
     BM25 source. Audit inline is excluded."""
 
+    def _embed_texts(self, entry: ParsedEntry) -> tuple[str, ...]:
+        return (entry.structured.sections.get("Fact", "").strip(),)
+
     async def _build_row(
         self,
         *,
@@ -43,11 +48,12 @@ class AtomicFactHandler(BaseDailyLogHandler):
         project_id: str = "default",
         md_path: str,
         entry: ParsedEntry,
+        vectors: Sequence[list[float] | None] | None = None,
     ) -> AtomicFact:
         s = entry.structured
         text = s.sections.get("Fact", "").strip()
         tokens = self._deps.tokenizer.tokenize(text)
-        vector = await self._deps.embedder.embed(text)
+        (vector,) = await self._resolve_vectors(entry, md_path, vectors)
         return AtomicFact(
             id=f"{owner_id}_{entry.entry_id}",
             entry_id=entry.entry_id,

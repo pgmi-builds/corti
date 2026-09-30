@@ -34,8 +34,17 @@ from corti.component.tokenizer import build_tokenizer
 from corti.component.utils.datetime import to_display_tz
 from corti.config import load_settings
 from corti.core.persistence import MemoryRoot
-from corti.infra.persistence.pg import dispose as pg_dispose
-from corti.infra.persistence.pg import init as pg_init
+from corti.infra.persistence.pg import (
+    atomic_fact_repo,
+    episode_repo,
+    foresight_repo,
+)
+from corti.infra.persistence.pg import (
+    dispose as pg_dispose,
+)
+from corti.infra.persistence.pg import (
+    init as pg_init,
+)
 from corti.infra.persistence.sqlite import (
     dispose_engine,
     get_engine,
@@ -224,6 +233,50 @@ def fix(
                 )
                 for r in permanent_rows:
                     typer.echo(f"  {r.md_path}")
+
+    asyncio.run(_run())
+
+
+# ── backfill ─────────────────────────────────────────────────────────────
+
+
+@app.command("backfill")
+def backfill(
+    drain: Annotated[
+        bool,
+        typer.Option(
+            "--drain/--no-drain",
+            help="Drain the worker once after enqueueing (default: on).",
+        ),
+    ] = True,
+) -> None:
+    """Re-enqueue md files holding rows whose embedding is still missing.
+
+    Rows written while the embedder was unreachable carry ``vector = NULL``.
+    They stay keyword-searchable, but nothing revisits them: their content
+    hash already matches, and a frozen daily log never changes again. This
+    command finds those files and re-enqueues them so the handler re-runs and
+    embeds the gaps. Safe while the embedder is still down — that run is then
+    a no-op."""
+
+    async def _run() -> None:
+        async with _runtime():
+            missing: dict[str, str] = {}
+            for repo in (episode_repo, atomic_fact_repo, foresight_repo):
+                for md_path in await repo.find_md_paths_missing_vectors():
+                    spec = match_kind(md_path)
+                    if spec is not None:
+                        missing[md_path] = spec.name
+            if not missing:
+                typer.echo("no rows missing a vector")
+                return
+            for md_path, kind in sorted(missing.items()):
+                await md_change_state_repo.force_enqueue(md_path, kind)
+            typer.echo(f"force-enqueued {len(missing)} file(s) with missing vectors")
+            if drain:
+                orchestrator = _build_orchestrator()
+                processed = await orchestrator.sync_once()
+                typer.echo(f"drained — processed {processed} row(s)")
 
     asyncio.run(_run())
 

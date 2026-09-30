@@ -30,7 +30,7 @@ writers must match):
 
 from __future__ import annotations
 
-import asyncio
+from collections.abc import Sequence
 
 from corti.infra.persistence.pg import Episode, ParentType, episode_repo
 
@@ -57,6 +57,12 @@ class EpisodeHandler(BaseDailyLogHandler):
       call on Subject edits) is accepted under the single-hash design
       (cascade Q2 discussion)."""
 
+    def _embed_texts(self, entry: ParsedEntry) -> tuple[str, ...]:
+        s = entry.structured
+        text = s.sections.get("Content", "").strip()
+        subject_text = s.sections.get("Subject", "").strip()
+        return (text, subject_text) if subject_text else (text,)
+
     async def _build_row(
         self,
         *,
@@ -66,20 +72,16 @@ class EpisodeHandler(BaseDailyLogHandler):
         project_id: str = "default",
         md_path: str,
         entry: ParsedEntry,
+        vectors: Sequence[list[float] | None] | None = None,
     ) -> Episode:
         s = entry.structured
         text = s.sections.get("Content", "").strip()
         subject_text = s.sections.get("Subject", "").strip()
 
-        # Embed content and subject concurrently; skip subject embed when absent.
-        if subject_text:
-            vector, subject_vector = await asyncio.gather(
-                self._deps.embedder.embed(text),
-                self._deps.embedder.embed(subject_text),
-            )
-        else:
-            vector = await self._deps.embedder.embed(text)
-            subject_vector = None
+        # ``vectors`` aligns with ``_embed_texts``: [content, subject?].
+        resolved = await self._resolve_vectors(entry, md_path, vectors)
+        vector = resolved[0]
+        subject_vector = resolved[1] if len(resolved) > 1 else None
 
         # BM25 tokenization covers both body and subject keywords.
         tokenize_source = f"{text} {subject_text}" if subject_text else text

@@ -76,7 +76,13 @@ _DAILY_LOG_COMMON = """\
     md_path         text NOT NULL,
     content_sha256  text NOT NULL,
     deprecated_by   text,
-    vector          vector({dim}) NOT NULL"""
+    -- NULL means "embedding not computed yet": the embedder was
+    -- unreachable when the row was written. The row is still written so the
+    -- memory stays keyword/BM25 searchable, and the cascade backfills the
+    -- vector once the embedder recovers. pgvector skips NULL rows in HNSW
+    -- and in ``<=>`` comparisons, so an unbackfilled row is simply invisible
+    -- to vector recall rather than poisoning the ordering.
+    vector          vector({dim})"""
 
 _DAILY_LOG_INDEXES = """\
     -- HNSW cosine index on vector
@@ -253,6 +259,13 @@ DDL_STATEMENTS: Final[list[str]] = [
     _FORESIGHT_IDX,
     _KNOWLEDGE_TOPIC_IDX,
     _USER_PROFILE_IDX,
+    # Idempotent migrations — ``CREATE TABLE IF NOT EXISTS`` leaves
+    # pre-existing tables untouched, so the embedding column's NOT NULL
+    # constraint needs an explicit ALTER. ``DROP NOT NULL`` is a no-op on an
+    # already-nullable column, so re-running on every startup is safe.
+    "ALTER TABLE episode ALTER COLUMN vector DROP NOT NULL;",
+    "ALTER TABLE atomic_fact ALTER COLUMN vector DROP NOT NULL;",
+    "ALTER TABLE foresight ALTER COLUMN vector DROP NOT NULL;",
 ]
 
 

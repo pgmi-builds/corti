@@ -34,5 +34,5 @@ class Episode(PgBaseModel):
     md_path: str
     content_sha256: str
     deprecated_by: str | None = None
-    vector: list[float] = []
+    vector: list[float] | None = None
     subject_vector: list[float] | None = None

@@ -36,4 +36,4 @@ class Foresight(PgBaseModel):
     evidence_tokens: str | None = None
     md_path: str
     content_sha256: str
-    vector: list[float] = []
+    vector: list[float] | None = None

@@ -237,7 +237,7 @@ async def test_agentic_search_wires_benchmark_hyperparams(
         )
 
     assert captured["top_n"] == 10
-    assert captured["round1_top_n"] == 50
+    assert captured["round1_top_n"] == 20
     assert captured["round1_rerank_top_n"] == 10
     assert captured["round2_cap"] == 40
     assert captured["multi_query_count"] == 3
