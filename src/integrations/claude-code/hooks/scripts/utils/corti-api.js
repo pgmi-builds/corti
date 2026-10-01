@@ -47,7 +47,8 @@ async function postJSON(url, body, timeoutMs = TIMEOUT_MS) {
     if (!response.ok) {
       return { ok: false, status: response.status, error: data || text };
     }
-    return { ok: true, status: response.status, data: data?.data ?? data };
+    // Every 200 wraps its payload in { request_id, data } (docs/api.md).
+    return { ok: true, status: response.status, data: data?.data };
   } catch (error) {
     clearTimeout(timeoutId);
     if (error.name === 'AbortError') {

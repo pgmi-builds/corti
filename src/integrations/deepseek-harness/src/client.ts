@@ -165,7 +165,8 @@ export class CortiClient {
       }
       if (!res.ok) return { ok: false, status: res.status, error: parsed ?? text };
       const envelope = parsed as { data?: unknown } | null;
-      return { ok: true, status: res.status, data: (envelope?.data ?? parsed) as T };
+      // Every 200 wraps its payload in { request_id, data } (docs/api.md).
+      return { ok: true, status: res.status, data: envelope?.data as T };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return { ok: false, status: 0, error: controller.signal.aborted ? `timeout after ${timeoutMs}ms` : message };

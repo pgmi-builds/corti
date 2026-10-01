@@ -48,7 +48,8 @@ export class CortiClient {
             if (!res.ok)
                 return { ok: false, status: res.status, error: parsed ?? text };
             const envelope = parsed;
-            return { ok: true, status: res.status, data: (envelope?.data ?? parsed) };
+            // Every 200 wraps its payload in { request_id, data } (docs/api.md).
+            return { ok: true, status: res.status, data: envelope?.data };
         }
         catch (err) {
             const message = err instanceof Error ? err.message : String(err);
