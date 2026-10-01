@@ -58,6 +58,10 @@ class _ScopedRequest(BaseModel):
     """Sender tag written onto any row this endpoint creates. ``None`` keeps
     the value anonymous (shared memory with no attributable contributor)."""
     session_id: str | None = None
+    """Host session key. *Stored* by ``session/end`` (it is the conflict key
+    of the digest row) and accepted on the other endpoints so an adapter can
+    send one uniform scope object; the read endpoints do not consult it
+    yet."""
 
 
 # ── Shared items ─────────────────────────────────────────────────────────
