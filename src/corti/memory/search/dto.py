@@ -223,6 +223,12 @@ class SearchData(BaseModel):
     """In-flight messages still in the boundary-detection buffer for
     the ``filters.session_id`` (if supplied as a top-level eq scalar);
     otherwise stays empty."""
+    degraded_note: str = ""
+    """``degraded`` rendered for a model to read, or ``""`` when healthy.
+
+    Rendered here rather than in each adapter so the sentence has one home
+    and every runtime says the same thing.
+    """
     degraded: list[str] = Field(default_factory=list)
     """Retrieval legs that were unavailable and got substituted.
 

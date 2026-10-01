@@ -2445,6 +2445,11 @@
             "type": "array",
             "title": "Unprocessed Messages"
           },
+          "degraded_note": {
+            "type": "string",
+            "title": "Degraded Note",
+            "default": ""
+          },
           "degraded": {
             "items": {
               "type": "string"

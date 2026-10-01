@@ -133,6 +133,7 @@ export declare class CortiClient {
     }): Promise<Envelope<{
         episodes: Episode[];
         degraded?: string[];
+        degraded_note?: string;
     }>>;
     /**
      * POST /api/v1/memory/session/start — the once-per-session injected block.

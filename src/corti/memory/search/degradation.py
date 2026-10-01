@@ -34,3 +34,23 @@ def mark_degraded(leg: str) -> None:
 def degraded_legs() -> list[str]:
     """The legs degraded so far in this request (never ``None``)."""
     return list(_degraded.get() or [])
+
+
+def render_note(legs: list[str]) -> str:
+    """The human-readable line a *tool result* carries when recall was partial.
+
+    Rendered server-side on purpose. Every adapter needs this sentence, and
+    three adapters each composing it is how the fleet ends up disagreeing
+    about what degradation sounds like — or, worse, with one adapter that
+    forgets to mention it and leaves "nothing found" and "the semantic leg is
+    down" looking identical to the model.
+
+    Empty string when nothing degraded, so a caller can append unconditionally.
+    """
+    if not legs:
+        return ""
+    joined = ", ".join(legs)
+    return (
+        f"[recall degraded: {joined} unavailable — these results are partial, "
+        "not the full ranking]"
+    )

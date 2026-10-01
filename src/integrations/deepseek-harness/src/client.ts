@@ -185,8 +185,8 @@ export class CortiClient {
   async search(
     query: string,
     opts: { topK?: number; method?: string } = {},
-  ): Promise<Envelope<{ episodes: Episode[]; degraded?: string[] }>> {
-    return this.post<{ episodes: Episode[]; degraded?: string[] }>(
+  ): Promise<Envelope<{ episodes: Episode[]; degraded?: string[]; degraded_note?: string }>> {
+    return this.post<{ episodes: Episode[]; degraded?: string[]; degraded_note?: string }>(
       "/api/v1/memory/search",
       {
         query,

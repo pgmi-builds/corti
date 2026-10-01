@@ -79,11 +79,17 @@ adapter may show or drop.
 
 ## Shipped adapters
 
-| Runtime | Adapter | Hook mapping |
-|---|---|---|
-| DeepSeek Harness | `src/integrations/deepseek-harness/` | `system-prompt/assemble` → session start; `agent/pre-step` → prefetch; capture hook → add/flush + session end |
-| Claude Code | `src/integrations/claude-code/` | `SessionStart` / `UserPromptSubmit` / `Stop` / `SessionEnd` hooks; MCP server for the tool surface |
-| Hermes | `src/integrations/hermes/` | `system_prompt_block` / `prefetch` / `sync_turn` / `on_session_end` provider methods |
+| Runtime | Adapter | Loaded from | Hook mapping |
+|---|---|---|---|
+| DeepSeek Harness | `src/integrations/deepseek-harness/` | `$DSH_HOME/profiles/<profile>/node_modules/corti-memory/` (one copy **per profile**) | `system-prompt/assemble` → session start; `agent/pre-step` → prefetch; capture hook → add/flush + session end |
+| Claude Code | `src/integrations/claude-code/` | `~/.claude/skills/corti/` | `SessionStart` / `UserPromptSubmit` / `Stop` / `SessionEnd` hooks; MCP server for the tool surface |
+| Hermes | `src/integrations/hermes/` | `~/.hermes/plugins/corti/` | `system_prompt_block` / `prefetch` / `sync_turn` / `on_session_end` provider methods |
+
+Editing the repo changes nothing on its own — each runtime loads its own
+copy. Deploy with a full-tree copy, delete files the repo removed, and hash
+the install against the repo afterwards: a stale file left behind is how the
+Hermes bundle silently ran pre-refactor code for a day. A runtime that is
+already running needs a restart to pick the new bundle up.
 
 Read one of them before writing a new adapter — the shape is the same every
 time, and the diff that produced them is the clearest statement of what

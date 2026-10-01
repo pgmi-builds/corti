@@ -40,6 +40,7 @@ from corti.memory.runtime_context import (
     truncate_block,
 )
 from corti.memory.search import SearchEpisodeItem, SearchProfileItem, SearchRequest
+from corti.memory.search.degradation import render_note
 
 from .get import get as _get_memory
 from .search import search as _search_memory
@@ -93,7 +94,7 @@ async def prefetch(req: PrefetchRequest) -> PrefetchData:
         profile_line = _profile_line(data.profiles)
         if profile_line:
             prefixes.append(profile_line)
-    note = _degradation_note(degraded)
+    note = render_note(degraded)
     if note:
         prefixes.append(note)
 
@@ -190,21 +191,6 @@ async def session_end(req: SessionEndRequest) -> SessionEndData:
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
-
-
-def _degradation_note(legs: list[str]) -> str:
-    """Tell the model — and the operator — that recall was partial.
-
-    A keyword-only answer presented as semantic is worse than an honest
-    one: the model trusts the ranking it did not get.
-    """
-    if not legs:
-        return ""
-    joined = ", ".join(legs)
-    return (
-        f"[memory notice: {joined} unavailable this turn — "
-        "recall used the remaining legs]"
-    )
 
 
 def _search_hit(ep: SearchEpisodeItem) -> RuntimeHit:

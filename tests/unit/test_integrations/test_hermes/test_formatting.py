@@ -15,11 +15,7 @@ from __future__ import annotations
 
 import json
 
-from hermes._formatting import (
-    degradation_note,
-    format_memory_write_message,
-    format_tool_result,
-)
+from hermes._formatting import format_memory_write_message, format_tool_result
 
 # ── format_tool_result ──────────────────────────────────────────────────────
 
@@ -44,23 +40,3 @@ def test_format_memory_write_message_fields() -> None:
     assert msg["content"] == "hello world"
     # Required MessageItem keys are all present.
     assert {"sender_id", "role", "timestamp", "content"} <= set(msg)
-
-
-# ── degradation_note ────────────────────────────────────────────────────────
-
-
-def test_degradation_note_is_empty_when_nothing_degraded() -> None:
-    """A healthy provider must not add noise to the tool result."""
-    assert degradation_note([]) == ""
-    assert degradation_note(None) == ""
-    assert degradation_note("embedding") == ""  # wrong shape, not a crash
-
-
-def test_degradation_note_names_the_missing_leg() -> None:
-    note = degradation_note(["embedding"])
-    assert note.startswith("[recall degraded: embedding")
-    assert "partial" in note
-
-
-def test_degradation_note_lists_several_legs() -> None:
-    assert "rerank" in degradation_note(["embedding", "rerank"])

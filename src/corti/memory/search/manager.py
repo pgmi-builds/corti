@@ -45,7 +45,7 @@ from everalgo.types import Candidate, RankInput
 
 from .adapter import resolve_pipeline
 from .agentic import search_episodes_agentic
-from .degradation import degraded_legs, mark_degraded, reset_degradation
+from .degradation import degraded_legs, mark_degraded, render_note, reset_degradation
 from .dto import (
     FilterNode,
     SearchData,
@@ -181,6 +181,7 @@ class SearchManager:
             profiles=profiles,
             unprocessed_messages=unprocessed,
             degraded=degraded_legs(),
+            degraded_note=render_note(degraded_legs()),
         )
 
         return SearchResponse(request_id=request_id, data=data)

@@ -978,3 +978,26 @@ def _now_minus(seconds: float) -> float:
     import time
 
     return time.monotonic() - seconds
+
+
+def test_handle_tool_call_search_prints_the_servers_note(make_provider):
+    """The degradation sentence is rendered by the server, not composed here."""
+    note = (
+        "[recall degraded: embedding unavailable — these results are partial, "
+        "not the full ranking]"
+    )
+    fake = FakeCortiClient(
+        search_data={**_search_data_with_episode(), "degraded_note": note}
+    )
+    prov = make_provider(fake=fake)
+    payload = json.loads(prov.handle_tool_call("mem_search", {"query": "tea"}))
+    assert payload["note"] == note
+    prov.shutdown()
+
+
+def test_handle_tool_call_search_omits_the_note_when_healthy(make_provider):
+    fake = FakeCortiClient(search_data=_search_data_with_episode())
+    prov = make_provider(fake=fake)
+    payload = json.loads(prov.handle_tool_call("mem_search", {"query": "tea"}))
+    assert "note" not in payload
+    prov.shutdown()

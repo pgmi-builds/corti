@@ -38,6 +38,7 @@ from corti.memory.search import (
     SearchRequest,
     SearchResponse,
 )
+from corti.memory.search.degradation import render_note
 
 _FIXED_TS = _dt.datetime(2026, 1, 2, 12, 0, tzinfo=_dt.UTC)
 
@@ -273,8 +274,9 @@ async def test_prefetch_degradation_notice_and_flag(
         PrefetchRequest(user_id="alice", query="explain the failover design")
     )
     assert resp.degraded == ["embedding"]
-    assert "memory notice" in resp.block
-    assert "embedding" in resp.block
+    # Assert against the shared renderer, not a literal: the sentence has one
+    # home now, and this test should not be the second copy of it.
+    assert render_note(["embedding"]) in resp.block
 
 
 # ── session/start ────────────────────────────────────────────────────────

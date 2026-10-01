@@ -8,7 +8,7 @@ calls Corti via HTTP, and writes JSON-RPC to stdout.
 Tools (mirror Hermes corti plugin):
   mem_search   - Search memories (keyword/hybrid/vector/agentic)
   mem_recall   - Get recent memories (briefing)
-  mem_remember - Store a fact immediately (add + flush)
+  mem_add      - Store a fact immediately (add + flush)
   mem_flush    - Trigger extraction for a session
 
 Scoping (shared with Hermes + Claude Code hooks):
@@ -175,8 +175,14 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextCon
                 },
             )
             episodes = data.get("episodes", [])
+            # The server renders the sentence; this layer only prints it. An
+            # empty result and a keyword-only result must not read the same.
+            note = data.get("degraded_note", "")
             if not episodes:
-                return [TextContent(type="text", text="No relevant memories found.")]
+                body = "No relevant memories found."
+                return [
+                    TextContent(type="text", text=f"{body}\n{note}" if note else body)
+                ]
             lines = []
             for i, ep in enumerate(episodes, 1):
                 score = ep.get("score", 0)
@@ -184,7 +190,8 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextCon
                 subject = ep.get("subject", "")
                 text = ep.get("episode") or ep.get("summary", "")
                 lines.append(f"[{i}] (score: {score:.2f}, {ts}) {subject}\n{text}")
-            return [TextContent(type="text", text="\n\n---\n\n".join(lines))]
+            body = "\n\n---\n\n".join(lines)
+            return [TextContent(type="text", text=f"{body}\n{note}" if note else body)]
 
         elif name == "mem_recall":
             count = args.get("count", 5)

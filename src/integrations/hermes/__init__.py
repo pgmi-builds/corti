@@ -56,7 +56,6 @@ from ._constants import (
     TOOL_SEARCH,
 )
 from ._formatting import (
-    degradation_note,
     format_memory_write_message,
     format_tool_result,
 )
@@ -565,7 +564,8 @@ class CortiMemoryProvider(MemoryProvider):
             "results": data,
             "count": len(data.get("episodes") or []),
         }
-        note = degradation_note(data.get("degraded"))
+        # The server renders the sentence; the adapter only prints it.
+        note = data.get("degraded_note")
         if note:
             payload["note"] = note
         return format_tool_result(payload)

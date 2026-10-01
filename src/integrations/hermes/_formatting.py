@@ -17,26 +17,6 @@ import json
 from ._types import MessageItem
 
 
-def degradation_note(degraded: object) -> str:
-    """One line telling the model that recall was partial.
-
-    "(no results)" and "the semantic leg is down, so this was a lexical
-    answer" read identically otherwise, and a model cannot act on a
-    distinction it never sees. The server reports the substituted legs in
-    ``data.degraded``; this renders them. Mirrors the DSH adapter's tool
-    note so the two runtimes say the same thing.
-    """
-    if not isinstance(degraded, list):
-        return ""
-    legs = ", ".join(str(leg) for leg in degraded if leg)
-    if not legs:
-        return ""
-    return (
-        f"[recall degraded: {legs} unavailable — these results are partial, "
-        "not the full ranking]"
-    )
-
-
 def format_tool_result(data: object) -> str:
     """Serialize a tool result payload as JSON (the inner serializer)."""
     return json.dumps(data, ensure_ascii=False)
