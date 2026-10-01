@@ -56,6 +56,7 @@ from ._constants import (
     TOOL_SEARCH,
 )
 from ._formatting import (
+    degradation_note,
     format_memory_write_message,
     format_tool_result,
 )
@@ -560,12 +561,14 @@ class CortiMemoryProvider(MemoryProvider):
             if self._is_transient(exc.code):
                 self._record_failure()
             return tool_error(f"Corti search failed: {exc}")
-        return format_tool_result(
-            {
-                "results": data,
-                "count": len(data.get("episodes") or []),
-            }
-        )
+        payload: dict[str, Any] = {
+            "results": data,
+            "count": len(data.get("episodes") or []),
+        }
+        note = degradation_note(data.get("degraded"))
+        if note:
+            payload["note"] = note
+        return format_tool_result(payload)
 
     def _tool_list(
         self,
