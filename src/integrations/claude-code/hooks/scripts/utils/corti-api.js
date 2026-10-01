@@ -9,6 +9,11 @@
  *   POST /api/v1/memories/get     -> POST /api/v1/memory/get
  *   (implicit async)              -> POST /api/v1/memory/flush  (explicit)
  * 
+ * Runtime interop (the server owns the recall policy):
+ *   session/start -> the once-per-session block + display
+ *   prefetch      -> the once-per-turn block + display (or skipped)
+ *   session/end   -> the session record behind session/start
+ * 
  * Scoping changes:
  *   group_id, user_id, Bearer token  ->  app_id, project_id, user_id, agent_id (no auth)
  * 
@@ -84,26 +89,6 @@ export async function searchMemories(query, options = {}) {
   return postJSON(`${config.baseUrl}/api/v1/memory/search`, body);
 }
 
-/**
- * Transform OSS search response to plugin memory format.
- * OSS returns: { data: { episodes: [{ id, user_id, session_id, timestamp, sender_ids, summary, subject, episode, type, score }] } }
- */
-export function transformSearchResults(response) {
-  const episodes = response?.data?.episodes;
-  if (!Array.isArray(episodes)) return [];
-  return episodes
-    .map(ep => ({
-      text: ep.episode || ep.summary || '',
-      subject: ep.subject || '',
-      timestamp: ep.timestamp || new Date().toISOString(),
-      score: ep.score || 0,
-      senderIds: ep.sender_ids || [],
-      sessionId: ep.session_id || '',
-    }))
-    .filter(m => m.text)
-    .sort((a, b) => b.score - a.score);
-}
-
 // ── add (store) ──────────────────────────────────────────────────────────────
 
 /**
@@ -168,19 +153,97 @@ export async function getMemories(options = {}) {
   return postJSON(`${config.baseUrl}/api/v1/memory/get`, body);
 }
 
+// ── runtime interop (server-owned policy) ────────────────────────────────────
+//
+// These endpoints render finished text: the block to inject and the one-line
+// display. The plugin only forwards scope plus host facts (session id, prompt,
+// transcript stats); any option left undefined is dropped from the request
+// body so the server's own defaults decide.
+
 /**
- * Transform OSS get response to simple format.
+ * Fetch the once-per-session block (profile, last session, recent catalog).
+ * @param {Object} [options]
+ * @param {string} [options.sessionId] - Host session id
+ * @param {number} [options.recencyWindow] - Episodes scanned for the catalog
+ * @param {number} [options.recencySample] - Random sample size (0 = newest first)
+ * @param {number} [options.recentCount] - Catalog size when recencySample is 0
+ * @param {number} [options.maxChars] - Character ceiling for the block
+ * @param {boolean} [options.includeProfile]
+ * @returns {Promise<Object>} Envelope { ok, status, data?, error? }
  */
-export function transformGetMemoriesResults(response) {
-  const episodes = response?.data?.episodes;
-  if (!Array.isArray(episodes)) return [];
-  return episodes
-    .map(ep => ({
-      text: ep.episode || ep.summary || '',
-      subject: ep.subject || '',
-      timestamp: ep.timestamp || new Date().toISOString(),
-      sessionId: ep.session_id || '',
-    }))
-    .filter(m => m.text)
-    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+export async function startSession(options = {}) {
+  const config = getConfig();
+  const { sessionId, recencyWindow, recencySample, recentCount, maxChars, includeProfile } = options;
+  const body = {
+    ...buildScope(),
+    agent_id: config.agentId,
+    session_id: sessionId,
+    recency_window: recencyWindow,
+    recency_sample: recencySample,
+    recent_count: recentCount,
+    max_chars: maxChars,
+    include_profile: includeProfile,
+  };
+  debug('startSession', { url: `${config.baseUrl}/api/v1/memory/session/start`, body });
+  return postJSON(`${config.baseUrl}/api/v1/memory/session/start`, body);
 }
+
+/**
+ * Fetch the per-turn recall block.
+ * A non-null `skipped` in the response is a normal outcome: inject nothing.
+ * @param {string} query - The user's prompt
+ * @param {Object} [options]
+ * @param {string} [options.method] - keyword|vector|hybrid|agentic
+ * @param {number} [options.topK]
+ * @param {number} [options.minScore]
+ * @param {number} [options.maxChars]
+ * @param {boolean} [options.includeProfile]
+ * @param {string} [options.sessionId]
+ * @returns {Promise<Object>} Envelope { ok, status, data?, error? }
+ */
+export async function prefetchMemories(query, options = {}) {
+  const config = getConfig();
+  const { method, topK, minScore, maxChars, includeProfile, sessionId } = options;
+  const body = {
+    query,
+    method,
+    top_k: topK,
+    min_score: minScore,
+    max_chars: maxChars,
+    include_profile: includeProfile,
+    session_id: sessionId,
+    agent_id: config.agentId,
+    ...buildScope(),
+  };
+  debug('prefetchMemories', { url: `${config.baseUrl}/api/v1/memory/prefetch`, body });
+  return postJSON(`${config.baseUrl}/api/v1/memory/prefetch`, body);
+}
+
+/**
+ * Record a finished session so session/start can report it to any runtime.
+ * @param {Object} payload
+ * @param {string} payload.sessionId - REQUIRED: the hook payload's session_id
+ * @param {string} [payload.firstPrompt] - First user prompt from the transcript
+ * @param {number} [payload.turnCount]
+ * @param {string} [payload.startedAt] - ISO timestamp
+ * @param {string} [payload.endedAt] - ISO timestamp
+ * @param {string} [payload.reason]
+ * @returns {Promise<Object>} Envelope { ok, status, data?, error? }
+ */
+export async function endSession(payload = {}) {
+  const config = getConfig();
+  const { sessionId, firstPrompt, turnCount, startedAt, endedAt, reason } = payload;
+  const body = {
+    ...buildScope(),
+    agent_id: config.agentId,
+    session_id: sessionId,
+    first_prompt: firstPrompt,
+    turn_count: turnCount,
+    started_at: startedAt,
+    ended_at: endedAt,
+    reason,
+  };
+  debug('endSession', { url: `${config.baseUrl}/api/v1/memory/session/end`, body });
+  return postJSON(`${config.baseUrl}/api/v1/memory/session/end`, body);
+}
+

@@ -2,20 +2,21 @@
 
 /**
  * Corti SessionEnd Hook
- * Saves session summary (first user prompt + stats) to local storage
- * No AI summarization - just extracts key info from transcript
+ * Parses the transcript (host-specific shape) and hands the session facts to
+ * the Corti server, which owns the session record. No local session file:
+ * the summary is stored server-side so every runtime can read it.
  */
 
-import { readFileSync, appendFileSync, existsSync } from 'fs';
-import { resolve, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { readFileSync, existsSync } from 'fs';
 import { getConfig } from './utils/config.js';
+import { endSession } from './utils/corti-api.js';
 import { debug, setDebugPrefix } from './utils/debug.js';
 
 setDebugPrefix('session-end');
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const SESSIONS_FILE = resolve(__dirname, '../../data/sessions.jsonl');
+// Same prefix the Stop hook uses to write episodes, so the stored digest and
+// the episodes it describes share one session key.
+const CORTI_SESSION_PREFIX = 'claude-code-live';
 
 /**
  * Read transcript and extract key content
@@ -32,7 +33,6 @@ function extractTranscriptContent(transcriptPath) {
     const lines = content.trim().split('\n').filter(Boolean);
 
     let firstUserPrompt = null;
-    let lastUserPrompt = null;
     let turnCount = 0;
     let firstTimestamp = null;
     let lastTimestamp = null;
@@ -59,48 +59,19 @@ function extractTranscriptContent(transcriptPath) {
             if (!firstUserPrompt) {
               firstUserPrompt = msgContent.trim();
             }
-            lastUserPrompt = msgContent.trim();
           }
         }
-      } catch {}
+      } catch { }
     }
 
     return {
       firstUserPrompt: firstUserPrompt?.substring(0, 200) || '',
-      lastUserPrompt: lastUserPrompt?.substring(0, 200) || '',
       turnCount,
       firstTimestamp,
       lastTimestamp
     };
   } catch {
     return null;
-  }
-}
-
-/**
- * Save session summary to local JSONL file
- */
-function saveSummary(entry) {
-  try {
-    appendFileSync(SESSIONS_FILE, JSON.stringify(entry) + '\n', 'utf8');
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Check if session already has a summary
- */
-function alreadySummarized(sessionId) {
-  try {
-    if (!existsSync(SESSIONS_FILE)) {
-      return false;
-    }
-    const content = readFileSync(SESSIONS_FILE, 'utf8');
-    return content.includes(`"sessionId":"${sessionId}"`);
-  } catch {
-    return false;
   }
 }
 
@@ -121,12 +92,10 @@ async function main() {
 
   const { session_id, transcript_path, cwd, reason } = hookInput;
 
-  // Skip if no transcript or already summarized
+  // Skip if no transcript or session id
   if (!transcript_path || !session_id) {
     process.exit(0);
   }
-
-  const wasAlreadySummarized = alreadySummarized(session_id);
 
   // Set cwd for config
   if (cwd) {
@@ -144,56 +113,25 @@ async function main() {
     process.exit(0);
   }
 
-  // Use first user prompt as summary (truncated)
-  const summary = content.firstUserPrompt || 'Session with no text prompts';
+  const response = await endSession({
+    sessionId: `${CORTI_SESSION_PREFIX}-${session_id}`,
+    firstPrompt: content.firstUserPrompt,
+    turnCount: content.turnCount,
+    startedAt: content.firstTimestamp,
+    endedAt: content.lastTimestamp,
+    reason
+  });
 
-  // Calculate session duration
-  let durationStr = '';
-  if (content.firstTimestamp && content.lastTimestamp) {
-    const durationMs = new Date(content.lastTimestamp) - new Date(content.firstTimestamp);
-    const minutes = Math.floor(durationMs / 60000);
-    if (minutes < 1) {
-      durationStr = '<1min';
-    } else if (minutes < 60) {
-      durationStr = `${minutes}min`;
-    } else {
-      const hours = Math.floor(minutes / 60);
-      const remainMins = minutes % 60;
-      durationStr = remainMins > 0 ? `${hours}h${remainMins}m` : `${hours}h`;
-    }
+  if (!response.ok) {
+    debug('session/end error:', response.error);
+    process.exit(0);
   }
 
-  // Truncate summary for display
-  const displaySummary = summary.length > 50
-    ? summary.substring(0, 50) + '...'
-    : summary;
-
-  // Build output: turns, duration, summary
-  const parts = [`${content.turnCount} turns`];
-  if (durationStr) parts.push(durationStr);
-
-  // Save to local file (only if not already saved)
-  if (!wasAlreadySummarized) {
-    const entry = {
-      sessionId: session_id,
-      groupId: config.userId,
-      summary,
-      turnCount: content.turnCount,
-      reason: reason || 'unknown',
-      startTime: content.firstTimestamp,
-      endTime: content.lastTimestamp,
-      timestamp: new Date().toISOString()
-    };
-    saveSummary(entry);
-  }
-
-  // Always output session summary (whether saved or not)
-  const message = `📝 Session (${parts.join(', ')}): "${displaySummary}"`;
+  const message = response.data?.display || '';
 
   // Log to unified debug file
   debug('output', message);
 
-  console.error(message);  // Direct terminal output
   console.log(JSON.stringify({ systemMessage: message }));
 }
 
