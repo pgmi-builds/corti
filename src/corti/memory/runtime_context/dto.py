@@ -104,7 +104,7 @@ class SessionSummaryItem(BaseModel):
 class PrefetchRequest(_ScopedRequest):
     """Per-turn recall: "is anything from before relevant to this prompt?"."""
 
-    query: str = Field(min_length=1)
+    query: str = ""
     method: SearchMethod = SearchMethod.HYBRID
     top_k: int = Field(default=DEFAULT_INJECT_TOP_K, ge=1, le=100)
     min_score: Annotated[float, Field(ge=0.0, le=1.0)] = DEFAULT_MIN_SCORE
@@ -114,10 +114,14 @@ class PrefetchRequest(_ScopedRequest):
     @field_validator("query")
     @classmethod
     def _strip_query(cls, v: str) -> str:
-        stripped = v.strip()
-        if not stripped:
-            raise ValueError("query must not be blank")
-        return stripped
+        """Normalise whitespace; a blank prompt is a *skip*, not a 422.
+
+        An empty prompt is the most trivial prompt there is, and the hook
+        that sends it (a user pressing enter) must not receive an error it
+        then has to special-case. The service layer turns this into
+        ``skipped="trivial_prompt"``.
+        """
+        return v.strip()
 
 
 class PrefetchResponse(BaseModel):

@@ -2266,8 +2266,8 @@
           },
           "query": {
             "type": "string",
-            "minLength": 1,
-            "title": "Query"
+            "title": "Query",
+            "default": ""
           },
           "method": {
             "$ref": "#/components/schemas/SearchMethod",
@@ -2285,7 +2285,7 @@
             "maximum": 1.0,
             "minimum": 0.0,
             "title": "Min Score",
-            "default": 0.1
+            "default": 0.0
           },
           "max_chars": {
             "type": "integer",
@@ -2302,8 +2302,7 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "user_id",
-          "query"
+          "user_id"
         ],
         "title": "PrefetchRequest",
         "description": "Per-turn recall: \"is anything from before relevant to this prompt?\"."
