@@ -349,6 +349,53 @@ class _ClusterRepo(RepoBase[Cluster]):
                 if mid not in existing
             ]
             if new_member_rows:
+                # One member belongs to exactly one cluster. A re-processed
+                # episode can merge into a *different* cluster than the one it
+                # was originally assigned to; without evicting the stale row the
+                # membership table silently accumulates duplicates and the
+                # cluster it left keeps an inflated ``count``. The insert below
+                # only skips ids already present in *this* cluster, so the
+                # eviction has to happen here.
+                new_ids = [row.member_id for row in new_member_rows]
+                vacated = (
+                    (
+                        await s.execute(
+                            select(ClusterMember.cluster_id)
+                            .where(
+                                ClusterMember.member_id.in_(new_ids),
+                                ClusterMember.cluster_id != cluster_id,
+                            )
+                            .distinct()
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                if vacated:
+                    await s.execute(
+                        delete(ClusterMember).where(
+                            ClusterMember.member_id.in_(new_ids),
+                            ClusterMember.cluster_id != cluster_id,
+                        )
+                    )
+                    for vacated_id in vacated:
+                        remaining = (
+                            await s.execute(
+                                select(func.count())
+                                .select_from(ClusterMember)
+                                .where(ClusterMember.cluster_id == vacated_id)
+                            )
+                        ).scalar_one()
+                        if remaining == 0:
+                            await s.execute(
+                                delete(Cluster).where(Cluster.cluster_id == vacated_id)
+                            )
+                        else:
+                            await s.execute(
+                                update(Cluster)
+                                .where(Cluster.cluster_id == vacated_id)
+                                .values(count=remaining)
+                            )
                 s.add_all(new_member_rows)
             await s.commit()
 

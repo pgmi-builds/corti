@@ -233,7 +233,55 @@ async def test_upsert_is_idempotent_under_retry(repo: _ClusterRepo) -> None:
     assert rows[0].members == ["mc_one", "mc_two"]
 
 
-async def test_upsert_rejects_unset_cluster_id(repo: _ClusterRepo) -> None:
+async def test_upsert_evicts_member_from_its_former_cluster(
+    repo: _ClusterRepo,
+) -> None:
+    """A member belongs to exactly one cluster.
+
+    A re-processed episode can merge into a *different* cluster than the one it
+    was first assigned to. The stale membership row must be evicted and the
+    vacated cluster's ``count`` recomputed — otherwise the membership table
+    accumulates duplicates and ``count`` inflates. In production this left 4,028
+    phantom memberships and made the largest cluster report 4,046 members when
+    only 37 were real.
+    """
+    first = _make_cluster(
+        cluster_id="cl_evict000001",
+        centroid_vals=[1.0, 0.0],
+        members=["mc_shared"],
+        count=1,
+    )
+    await repo.upsert_with_members(
+        first,
+        owner_id="u_alice",
+        owner_type="user",
+        kind="user_memory",
+        member_type="memcell",
+    )
+
+    second = _make_cluster(
+        cluster_id="cl_evict000002",
+        centroid_vals=[0.0, 1.0],
+        members=["mc_shared", "mc_other"],
+        count=2,
+    )
+    await repo.upsert_with_members(
+        second,
+        owner_id="u_alice",
+        owner_type="user",
+        kind="user_memory",
+        member_type="memcell",
+    )
+
+    rows = await repo.list_for_owner("u_alice", "user_memory")
+    by_id = {row.id: row for row in rows}
+    # The vacated cluster lost its only member, so it is gone rather than left
+    # behind reporting a stale count.
+    assert "cl_evict000001" not in by_id
+    # Membership order is a storage detail; the invariant is the set.
+    assert set(by_id["cl_evict000002"].members) == {"mc_shared", "mc_other"}
+    assert by_id["cl_evict000002"].count == 2
+
     """Algo's ``Cluster.id`` is caller-supplied — None is a programming error."""
     cluster = AlgoCluster(
         id=None,

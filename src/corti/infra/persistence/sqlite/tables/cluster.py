@@ -12,7 +12,7 @@ member_id)``).
 
 from __future__ import annotations
 
-from sqlalchemy import Index, LargeBinary
+from sqlalchemy import Index, LargeBinary, UniqueConstraint
 
 from corti.component.utils.datetime import UtcDatetime
 from corti.core.persistence.sqlite import BaseTable, Field
@@ -82,7 +82,15 @@ class ClusterMember(BaseTable, table=True):
     """
 
     __tablename__ = "cluster_member"  # type: ignore[assignment]
-    __table_args__ = (Index("ix_cluster_member_reverse", "member_type", "member_id"),)
+    # One member belongs to exactly one cluster. The reverse index below is
+    # *defined* as a (member_type, member_id) → cluster_id lookup, which is only
+    # well-defined under this uniqueness; before the constraint existed a
+    # re-processed member could sit in several clusters at once and the reverse
+    # lookup silently returned one of them.
+    __table_args__ = (
+        Index("ix_cluster_member_reverse", "member_type", "member_id"),
+        UniqueConstraint("member_type", "member_id", name="uq_cluster_member_member"),
+    )
 
     cluster_id: str = Field(primary_key=True, foreign_key="cluster.cluster_id")
     """Parent cluster id."""
