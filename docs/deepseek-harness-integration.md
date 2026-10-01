@@ -23,8 +23,8 @@ Four integration points (`src/index.ts`):
 
 | # | Hook | What it does |
 |---|---|---|
-| 1 | `ctx.systemPrompt.section` | Adds a `corti:memory` guidance section to the system prompt (order 120), refreshed per assembly with a **random sample** of recent memory subjects (see [Startup recency sample](#startup-recency-sample)) |
-| 2 | `ctx.on("agent/pre-step")` | On step 1, searches Corti with the latest user message and splices a synthetic user message `[corti memory — recalled context, not a user message]` into the decision; trivial prompts (greetings, < 4 chars) are skipped |
+| 1 | `ctx.on("system-prompt/assemble")` | Keeps the static `corti:memory` guidance section (order 120) and appends the block returned by `POST /api/v1/memory/session/start` — profile, last session, and a random recent catalog. The section is built server-side; the plugin only concatenates |
+| 2 | `ctx.on("agent/pre-step")` | On step 1, posts the latest user message to `POST /api/v1/memory/prefetch` and injects the returned `block` verbatim when it is non-empty. `skipped` (trivial prompt, no relevant hits) means inject nothing — the decision is the server's |
 | 3 | `ctx.tools.register` | Registers `memory_search` / `memory_add` / `memory_list` / `memory_flush` model-facing tools |
 | 4 | `ctx.on("session/event")` | Buffers `user/message` + `assistant/message` events per session and submits them to Corti on `turn/end`; synthetic plugin injections (`source.kind === "plugin"`) are skipped to avoid a recall feedback loop |
 
@@ -164,12 +164,19 @@ One long session can span dozens of turns, and one agent can run many
 sessions, so reading the newest N entries would let a single task occupy
 every slot with fragments of itself.
 
-Instead the plugin fetches the newest `recencyWindow` records (200) and
-draws `recencySample` (10) of them **at random**, then renders one subject
-line each. The block is an awareness cue, not a ranking, and says so in the
-prompt: it is a random fetch over stored memory, not a summary of any
-complete task, and the entries are neither relevance-ranked nor
-necessarily recent. `memory_search` remains the path to a real answer.
+The **server** draws the catalog: it fetches the newest `recencyWindow`
+records (200) and samples `recencySample` (10) of them at random, then
+renders one subject line each. The plugin only forwards the two numbers.
+Setting `recencySample: 0` switches to the other mode — the newest N
+records, newest-first, no sampling.
+
+The block is an awareness cue, not a ranking, and says so in the prompt:
+it is a random fetch over stored memory, not a summary of any complete
+task, and the entries are neither relevance-ranked nor necessarily recent.
+`memory_search` remains the path to a real answer.
+
+See [runtime-integration.md](runtime-integration.md) for which side owns
+what, and [api.md](api.md#runtime-interop-endpoints) for the wire contract.
 
 ## Build
 
