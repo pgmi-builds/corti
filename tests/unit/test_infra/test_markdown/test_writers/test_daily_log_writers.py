@@ -11,6 +11,7 @@ writer ↔ reader round-trip on a fresh tmp memory_root.
 from __future__ import annotations
 
 import datetime as _dt
+import re
 from pathlib import Path
 
 import pytest
@@ -280,3 +281,68 @@ async def test_atomic_fact_frontmatter_last_appended_at_carries_display_tz_offse
     fs_path = memory_root.users_dir() / "u1" / ".foresights" / "foresight-2026-05-15.md"
     fs_fm = (await MarkdownReader.read(fs_path)).frontmatter
     assert fs_fm["last_appended_at"].endswith("+08:00"), fs_fm["last_appended_at"]
+
+
+# ── entry-id high-water mark ─────────────────────────────────────────────
+
+
+async def test_entry_seq_is_not_reused_after_an_entry_is_deleted(
+    memory_root: MemoryRoot,
+) -> None:
+    """A deletion must not let the next append re-mint a live entry's id.
+
+    ``EntryId.next_for`` mints ``seq = entry_count + 1``. A cleanup pass that
+    rewrites ``entry_count`` to the surviving block count therefore hands out
+    a sequence number that the entry after the hole still owns, which shadows
+    that entry in every ``entry_id`` join (cascade diff, ``cluster_member``,
+    reflection). ``_current_count`` returns the high-water mark instead.
+    """
+    writer = AtomicFactWriter(memory_root)
+    today = _dt.date(2026, 5, 15)
+    path = (
+        memory_root.users_dir() / "u1" / ".atomic_facts" / "atomic_fact-2026-05-15.md"
+    )
+
+    minted = [
+        await writer.append_entry(
+            "u1",
+            inline={
+                "owner_id": "u1",
+                "session_id": "s1",
+                "timestamp": f"2026-05-15T1{i}:00:00+00:00",
+                "parent_id": f"mc_{i}",
+            },
+            sections={"Fact": f"fact {i}"},
+            date=today,
+        )
+        for i in range(3)
+    ]
+    assert [e.seq for e in minted] == [1, 2, 3]
+
+    # Operator cleanup: drop the middle entry, then lower entry_count to the
+    # number of blocks that survived.
+    text = path.read_text(encoding="utf-8")
+    middle = minted[1].format()
+    start = text.index(f"<!-- entry:{middle} -->")
+    end = text.index(f"<!-- /entry:{middle} -->") + len(f"<!-- /entry:{middle} -->\n")
+    trimmed = text[:start] + text[end:]
+    text = re.sub(r"(?m)^entry_count:\s*\d+$", "entry_count: 2", trimmed)
+    path.write_text(text, encoding="utf-8")
+
+    fresh = await writer.append_entry(
+        "u1",
+        inline={
+            "owner_id": "u1",
+            "session_id": "s1",
+            "timestamp": "2026-05-15T14:00:00+00:00",
+            "parent_id": "mc_4",
+        },
+        sections={"Fact": "fact 4"},
+        date=today,
+    )
+
+    parsed = await MarkdownReader.read(path)
+    ids = [entry.id for entry in parsed.entries]
+    assert fresh.seq == 4
+    assert ids.count(fresh.format()) == 1
+    assert middle not in ids

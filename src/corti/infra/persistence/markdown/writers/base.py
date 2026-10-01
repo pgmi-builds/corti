@@ -249,16 +249,42 @@ class BaseDailyWriter:
     # ── Hooks (subclass override) ─────────────────────────────────────────
 
     async def _current_count(self, path: Path) -> int:
-        """Return the current entry count for the file.
+        """Return the file's entry-id high-water mark.
 
-        Default: number of ``<!-- entry:... -->`` blocks already present.
-        Subclasses may override to read a frontmatter field (e.g.
-        ``entry_count``) when they trust that field over a marker scan.
+        :meth:`EntryId.next_for` mints ``seq = current_count + 1``, so this
+        must be the **high-water mark of the sequences already handed out**,
+        not the number of blocks currently present. Deleting an entry from a
+        daily log (an operator cleanup, or any future pruning pass) lowers the
+        block count, and a count-based sequence would then re-mint an id that
+        a surviving entry already owns — silently shadowing that entry in the
+        index and in every ``entry_id`` join (``cluster_member``, reflection).
+
+        The watermark is the maximum of three sources, so it stays correct
+        whichever one drifted:
+
+        - the ``entry_count`` frontmatter field — the intended watermark, and
+          the only source that survives when a file is rebuilt/rewritten,
+        - the highest ``seq`` actually present among the entry markers,
+        - the live block count (a brand-new file has no frontmatter yet).
+
+        Subclasses may still override this hook to force a specific value.
         """
         if not await anyio.Path(path).is_file():
             return 0
         parsed = await MarkdownReader.read(path)
-        return len(parsed.entries)
+        try:
+            frontmatter_count = int(parsed.frontmatter.get("entry_count", 0) or 0)
+        except (TypeError, ValueError):
+            frontmatter_count = 0
+        highest_seq = 0
+        for entry in parsed.entries:
+            try:
+                parsed_id = EntryId.parse(entry.id)
+            except ValueError:
+                continue
+            if parsed_id.prefix == self.schema.ENTRY_ID_PREFIX:
+                highest_seq = max(highest_seq, parsed_id.seq)
+        return max(frontmatter_count, highest_seq, len(parsed.entries))
 
     def _frontmatter_updates(
         self,
