@@ -1,6 +1,6 @@
 {
   "name": "corti-memory",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Corti persistent cross-session memory for DeepSeek Harness — startup recall injection, per-prompt retrieval, memory tools, turn-end capture, and a Settings/General on/off switch (client half).",
   "type": "module",
   "main": "dist/index.js",

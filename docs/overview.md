@@ -92,4 +92,4 @@ Strict single-direction dependency, enforced by `import-linter` in CI.
 
 ## Status
 
-**Latest stable release: v0.3.0** — Docker-first distribution; see [releases](https://github.com/pgmi-builds/corti/releases).
+**Latest stable release: v0.3.4** — memory policy served from the server, thin runtime adapters; see [releases](https://github.com/pgmi-builds/corti/releases).
