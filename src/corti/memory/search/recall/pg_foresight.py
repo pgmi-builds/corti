@@ -9,7 +9,7 @@ from typing import ClassVar
 from corti.infra.persistence.pg import foresight_repo
 from everalgo.types import Candidate
 
-from .base import RecallerDeps
+from .base import RecallerDeps, tsquery_text
 
 
 class PgForesightRecaller:
@@ -30,6 +30,7 @@ class PgForesightRecaller:
         self, query: str, where: str, *, limit: int
     ) -> list[Candidate]:
         """BM25 recall via tsvector (dual-column: foresight + evidence)."""
+        q = tsquery_text(self._deps, query)
         pool = await foresight_repo._pool()
         # Dual-column UNION ALL with max score merge
         sql = (
@@ -46,7 +47,7 @@ class PgForesightRecaller:
             "ORDER BY _score DESC LIMIT %s"
         )
         async with pool.connection() as conn:
-            cur = await conn.execute(sql, (query, query, query, query, limit))
+            cur = await conn.execute(sql, (q, q, q, q, limit))
             rows = await cur.fetchall()
         return [_row_to_candidate(r, source="keyword") for r in rows]
 

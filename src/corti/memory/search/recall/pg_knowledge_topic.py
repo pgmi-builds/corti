@@ -14,7 +14,7 @@ from typing import ClassVar
 from corti.infra.persistence.pg import knowledge_topic_repo
 from everalgo.types import Candidate
 
-from .base import RecallerDeps
+from .base import RecallerDeps, tsquery_text
 
 
 class PgKnowledgeTopicRecaller:
@@ -31,6 +31,7 @@ class PgKnowledgeTopicRecaller:
         self, query: str, where: str, *, limit: int
     ) -> list[Candidate]:
         """Dual-column BM25 recall via tsvector (summary + content)."""
+        q = tsquery_text(self._deps, query)
         pool = await knowledge_topic_repo._pool()
         sql = (
             "SELECT *, GREATEST("
@@ -46,7 +47,7 @@ class PgKnowledgeTopicRecaller:
             "ORDER BY _score DESC LIMIT %s"
         )
         async with pool.connection() as conn:
-            cur = await conn.execute(sql, (query, query, query, query, limit))
+            cur = await conn.execute(sql, (q, q, q, q, limit))
             rows = await cur.fetchall()
         return [_row_to_candidate(r, source="keyword") for r in rows]
 

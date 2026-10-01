@@ -54,6 +54,26 @@ class RecallerDeps:
     tokenizer: Tokenizer
 
 
+def tsquery_text(deps: RecallerDeps, query: str) -> str:
+    """Put a query into the same token space as the indexed ``*_tokens``.
+
+    ``*_tokens_tsv`` is a generated column over space-joined tokenizer output
+    (see ``infra/persistence/pg/ddl.py::_tsv_column``), so a query has to be
+    tokenized by that same tokenizer before it reaches Postgres. Handing over
+    the raw string lets Postgres' own parser invent tokens the index never
+    had: ``CORTI-ITER-20261002-7Q4M`` becomes ``corti-iter`` *and* ``-7``,
+    neither of which appears in a document tokenized to
+    ``corti iter 20261002 7q4m``. ``plainto_tsquery`` ANDs every token, so an
+    identifier stored verbatim matched nothing at all.
+
+    Falls back to the raw query when the tokenizer yields nothing, so a
+    degenerate input degrades to the previous behaviour rather than to an
+    empty tsquery.
+    """
+    tokens = deps.tokenizer.tokenize(query)
+    return " ".join(tokens) if tokens else query
+
+
 @runtime_checkable
 class KindRecaller(Protocol):
     """One business kind, BM25 + vector recall over its DB table."""

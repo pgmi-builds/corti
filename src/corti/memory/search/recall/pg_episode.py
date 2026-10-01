@@ -13,7 +13,7 @@ from typing import ClassVar
 from corti.infra.persistence.pg import episode_repo
 from everalgo.types import Candidate
 
-from .base import RecallerDeps
+from .base import RecallerDeps, tsquery_text
 
 
 def _inject_parent_id(c: Candidate) -> Candidate:
@@ -40,6 +40,7 @@ class PgEpisodeRecaller:
         self, query: str, where: str, *, limit: int
     ) -> list[Candidate]:
         """BM25 recall via tsvector + plainto_tsquery (parameterized)."""
+        q = tsquery_text(self._deps, query)
         pool = await episode_repo._pool()
         sql = (
             "SELECT *, ts_rank_cd(episode_tokens_tsv, "
@@ -50,7 +51,7 @@ class PgEpisodeRecaller:
             "ORDER BY _score DESC LIMIT %s"
         )
         async with pool.connection() as conn:
-            cur = await conn.execute(sql, (query, query, limit))
+            cur = await conn.execute(sql, (q, q, limit))
             rows = await cur.fetchall()
         return [_row_to_candidate(r, source="keyword") for r in rows]
 
