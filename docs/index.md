@@ -13,7 +13,7 @@ before wiring it into a real workflow.
 |---|---|
 | [hermes-integration.md](hermes-integration.md) | Wire Hermes Agent to Corti as a long-term memory backend — install, config, lifecycle, tools |
 | [deepseek-harness-integration.md](deepseek-harness-integration.md) | Wire DeepSeek Harness to Corti (`corti-memory` plugin) — hooks, live runtime verification report, config |
-
+| [corti-memory-plugin-verification.md](corti-memory-plugin-verification.md) | Live re-verification of the `corti-memory` DSH plugin — harness results, defects, measured write-path latency |
 ## Reference
 
 Technical reference: contracts, commands, schemas — read these when you
