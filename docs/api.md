@@ -771,6 +771,35 @@ it does not perturb the ranker.
   applied, and only an explicit `radius` / `min_score` acts as a
   threshold.
 
+##### Measured score bands, and what a "no results" control actually needs
+
+A nearest-neighbour search always has neighbours, so with `top_k > 0` and no
+threshold an unrelated query returns the closest rows rather than nothing.
+Measured on the live corpus (2026-10-02, `qwen3.7-text-embedding`, one
+scope, `top_k=5`):
+
+| Query | `keyword` | `vector` (cosine) | `hybrid` (fused) |
+|---|---|---|---|
+| a real paraphrase of stored work | 0 hits | 0.59–0.67 | 0.18–0.27 |
+| `zzz qwerty flibbertigibbet` | **0 hits** | 0.46–0.48 | 0.10–0.13 |
+| `capital of Peru altitude` | 1 weak hit | 0.34–0.89 | 0.06–0.67 |
+
+Two consequences:
+
+- **`keyword` is the only method with a clean negative.** BM25 scores zero
+  when no term is shared, so it needs no threshold to prove "nothing
+  matches". A test that wants a genuine empty result under `vector` or
+  `hybrid` must pass `min_score` (≈ `0.2` separates the observed bands) — a
+  zero-hit expectation without one is a mistake in the test, not a bug in
+  the server.
+- **Do not set a default floor for agent-facing recall.** The bands are
+  close (a real paraphrase at 0.18 vs unrelated at 0.13 on `hybrid`) and the
+  fused scale shifts again when a leg is degraded — a BM25-only fused result
+  for a real match measured **0.008**. Any single default would drop real
+  memories to suppress weak ones, and a missed memory is worse than a weak
+  one the model can ignore. Prune with `top_k`; set `min_score` when you
+  know the method's scale and the query's shape.
+
 #### Response body
 
 `200 OK` returns a SuccessEnvelope wrapping `SearchData`. All five

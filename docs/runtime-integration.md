@@ -61,19 +61,23 @@ adapter may show or drop.
 4. **Never re-implement a fallback.** If recall came back keyword-only, the
    server already said so in `degraded` and already explained it inside
    `block`. Do not invent a second opinion.
-5. **Send the scope.** `user_id` plus the `app_id` / `project_id` from the
+5. **A "no results" assertion needs a threshold.** Nearest-neighbour recall
+   always has neighbours: under `vector` or `hybrid` an unrelated query
+   returns the closest rows unless `min_score` is set. Only `keyword` gives a
+   clean zero. See [api.md § Measured score bands](api.md#measured-score-bands-and-what-a-no-results-control-actually-needs).
+6. **Send the scope.** `user_id` plus the `app_id` / `project_id` from the
    adapter's config, and `agent_id` for attributable writes. The sender tag
    is memory, not telemetry — it is what makes shared memory trustworthy.
-6. **Derive a stable session id** from the host's own session key, and pass
+7. **Derive a stable session id** from the host's own session key, and pass
    the same value to `session/end`. A digest stored under an id nobody can
    reproduce is a digest nobody will ever read.
-7. **Do not read an `add` ack as one memory per call.** `status:
+8. **Do not read an `add` ack as one memory per call.** `status:
    "accepted"` means the raw turn is durably buffered. Episode boundaries are
    decided downstream by boundary detection, which reads the conversation:
    several calls in one window can become one episode, and one call can
    become none of its own. Report success as "accepted", not as "stored as a
    memory".
-8. **Keep provider errors off the model's channel.** "DashScope is in
+9. **Keep provider errors off the model's channel.** "DashScope is in
    arrears" is an operator message; surface it through the host's log or a
    warning channel, not as injected context.
 
