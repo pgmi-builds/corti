@@ -11,6 +11,11 @@ The provider mirrors each turn into Corti via a background sync thread,
 prefetches relevant memory before the agent answers, exposes four tools
 (``mem_search`` / ``mem_list`` / ``mem_add`` / ``mem_flush``),
 and trips a circuit breaker after repeated transient failures (mem0 parity).
+
+It holds no memory *policy*: the once-per-session and per-turn blocks are
+composed server-side by the runtime-interop endpoints and injected verbatim,
+so this module keeps only transport, the host's session handling, the cron
+guard and the breaker.
 """
 
 from __future__ import annotations
@@ -18,7 +23,6 @@ from __future__ import annotations
 import atexit
 import json
 import logging
-import re
 import threading
 import time
 from pathlib import Path
@@ -53,22 +57,12 @@ from ._constants import (
 )
 from ._formatting import (
     format_memory_write_message,
-    format_prefetch,
-    format_system_prompt,
     format_tool_result,
 )
 from ._setup import post_setup as _run_setup
 from ._types import CortiClientError, MessageItem, ScopeIds
 
 logger = logging.getLogger(__name__)
-
-# Trivial prompts that should not trigger a prefetch (mem0 parity).
-_TRIVIAL_PROMPT_RE = re.compile(
-    r"^(yes|no|ok|okay|sure|thanks|thank you|y|n|yep|nope|yeah|nah|"
-    r"continue|go ahead|do it|proceed|got it|cool|nice|great|done|next|"
-    r"lgtm|k)$",
-    re.IGNORECASE,
-)
 
 # Corti error codes that warrant circuit-breaker trips (transient). Client
 # errors (INVALID_INPUT / NOT_FOUND / ...) are not transient and do not count.
@@ -220,6 +214,8 @@ class CortiMemoryProvider(MemoryProvider):
         self._atexit_registered: bool = False
         self._system_prompt_cached: str = ""
         self._init_error: str = ""
+        self._platform: str = ""
+        self._cron_disabled: bool = False
 
     # ── identity / availability ───────────────────────────────────────────
 
@@ -249,6 +245,16 @@ class CortiMemoryProvider(MemoryProvider):
             self._client = None
             logger.warning("Corti client init failed: %s", exc)
         self._session_id = session_id
+        self._platform = kwargs.get("platform") or ""
+        # Cron/scheduled agents must be fully memory-silent: Hermes
+        # forces sync_turn + on_session_end on EVERY turn regardless of
+        # model intent, so a high-frequency watcher floods the shared
+        # store with near-identical episodes. Detect the cron platform
+        # (plus the cron_ session-id prefix as a fallback) and no-op
+        # every read/write hook below.
+        self._cron_disabled = self._platform == "cron" or (
+            (session_id or "").startswith("cron_")
+        )
         if not self._atexit_registered:
             atexit.register(self._shutdown_client)
             self._atexit_registered = True
@@ -293,6 +299,8 @@ class CortiMemoryProvider(MemoryProvider):
         session_id: str = "",
         messages: list[dict[str, Any]] | None = None,
     ) -> None:
+        if self._cron_disabled:
+            return
         if self._client is None or self._is_breaker_open():
             return
         now_ms = time.time_ns() // 1_000_000
@@ -342,6 +350,8 @@ class CortiMemoryProvider(MemoryProvider):
     # ── prefetch ──────────────────────────────────────────────────────────
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
+        if self._cron_disabled:
+            return ""
         if self._client is None or self._is_breaker_open():
             return ""
         cached = self._consume_prefetch_result(query)
@@ -354,7 +364,7 @@ class CortiMemoryProvider(MemoryProvider):
         return self._consume_prefetch_result(query) or ""
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
-        if self._is_trivial_prompt(query):
+        if self._cron_disabled:
             return
         self._start_prefetch(query)
 
@@ -375,20 +385,19 @@ class CortiMemoryProvider(MemoryProvider):
     def _prefetch_worker(self, query: str) -> None:
         client = self._client
         scope = self._scope
-        if client is None or scope is None:
+        user_id = self._user_id
+        if client is None or scope is None or user_id is None:
             return
         try:
-            data = client.search(
-                self._user_id,
-                None,
+            resp = client.prefetch(
+                user_id,
                 scope.app_id,
                 scope.project_id,
                 query,
-                include_profile=False,
-                top_k=_DEFAULT_TOOL_SEARCH_TOP_K,
-                method=_DEFAULT_SEARCH_METHOD,
+                self._session_id,
+                agent_id=self._agent_id,
             )
-            body = format_prefetch(query, data)
+            body = "" if resp.get("skipped") else (resp.get("block") or "")
             with self._prefetch_lock:
                 if self._prefetch_query == query:
                     self._prefetch_result = body
@@ -412,33 +421,37 @@ class CortiMemoryProvider(MemoryProvider):
                 return result
             return None
 
-    @staticmethod
-    def _is_trivial_prompt(query: str) -> bool:
-        q = (query or "").strip().lower()
-        if not q or q.startswith("/"):
-            return True
-        return bool(_TRIVIAL_PROMPT_RE.match(q))
-
     # ── session / memory-write hooks ──────────────────────────────────────
 
     def on_session_end(self, messages: list[dict[str, Any]]) -> None:
+        if self._cron_disabled:
+            return
         if self._sync_thread is not None:
             self._sync_thread.join(timeout=10.0)
-        if (
-            self._client is not None
-            and not self._is_breaker_open()
-            and self._scope is not None
-        ):
+        client = self._client
+        scope = self._scope
+        if client is not None and not self._is_breaker_open() and scope is not None:
             try:
-                self._client.flush_session(
-                    self._session_id,
-                    self._scope.app_id,
-                    self._scope.project_id,
-                )
+                client.flush_session(self._session_id, scope.app_id, scope.project_id)
             except CortiClientError as exc:
                 logger.warning("Corti flush on session end failed: %s", exc)
             except Exception:
                 logger.warning("Corti on_session_end error", exc_info=True)
+            # The server owns the session digest. This host knows only its
+            # session id and scope; it has no parsed transcript to offer.
+            if self._session_id and self._user_id is not None:
+                try:
+                    client.session_end(
+                        self._user_id,
+                        scope.app_id,
+                        scope.project_id,
+                        self._session_id,
+                        agent_id=self._agent_id,
+                    )
+                except CortiClientError as exc:
+                    logger.warning("Corti session/end failed: %s", exc)
+                except Exception:
+                    logger.warning("Corti session/end error", exc_info=True)
         self._shutdown_client()
 
     def on_memory_write(
@@ -448,6 +461,8 @@ class CortiMemoryProvider(MemoryProvider):
         content: str,
         metadata: dict[str, Any] | None = None,
     ) -> None:
+        if self._cron_disabled:
+            return
         effective = "add" if action in ("add", "replace") else action
         if (
             effective != "add"
@@ -485,11 +500,15 @@ class CortiMemoryProvider(MemoryProvider):
     # ── tools ─────────────────────────────────────────────────────────────
 
     def get_tool_schemas(self) -> list[dict[str, Any]]:
+        if self._cron_disabled:
+            return []
         return [_SEARCH_SCHEMA, _LIST_SCHEMA, _ADD_SCHEMA, _FLUSH_SCHEMA]
 
     def handle_tool_call(
         self, tool_name: str, args: dict[str, Any], **kwargs: Any
     ) -> str:
+        if self._cron_disabled:
+            return tool_error("Corti memory is disabled for scheduled (cron) sessions")
         if self._client is None:
             return tool_error(f"Corti backend not initialized: {self._init_error}")
         if self._is_breaker_open():
@@ -626,11 +645,15 @@ class CortiMemoryProvider(MemoryProvider):
     # ── prompt / config ───────────────────────────────────────────────────
 
     def system_prompt_block(self) -> str:
-        """Profile + recent 20 episode subjects, injected once per session.
+        """Once-per-session block from the server, plus the local tool banner.
 
-        Falls back to a static banner if the Corti API is unreachable
-        or the provider hasn't been initialised yet.
+        The server composes every memory-bearing line (profile, last session,
+        recent catalog); this adapter only appends the sentence naming its own
+        tool surface. Falls back to the static banner if the Corti API is
+        unreachable or the provider hasn't been initialised yet.
         """
+        if self._cron_disabled:
+            return ""
         if self._system_prompt_cached:
             return self._system_prompt_cached
         mode = (self._config or {}).get("mode", "oss")
@@ -644,35 +667,22 @@ class CortiMemoryProvider(MemoryProvider):
         )
         client = self._client
         scope = self._scope
-        if client is None or scope is None:
+        user_id = self._user_id
+        if client is None or scope is None or user_id is None:
             self._system_prompt_cached = banner
             return banner
         try:
-            # Fetch profile + recent episodes (2s grace each)
-            profile_data = client.get(
-                self._user_id,
-                None,
+            resp = client.session_start(
+                user_id,
                 scope.app_id,
                 scope.project_id,
-                "profile",
+                self._session_id,
+                agent_id=self._agent_id,
             )
-            episode_data = client.get(
-                self._user_id,
-                None,
-                scope.app_id,
-                scope.project_id,
-                "episode",
-                sort_by="timestamp",
-                sort_order="desc",
-                page_size=20,
-            )
-            profiles = list(profile_data.get("profiles") or [])
-            episodes = list(episode_data.get("episodes") or [])
-            body = format_system_prompt(
-                profiles[0] if profiles else None,
-                episodes,
-            )
-            self._system_prompt_cached = f"{body}\n\n{banner}"
+            block = resp.get("block") or ""
+            # The server's block never names a tool; the banner carries the
+            # sentence pointing at Hermes' own tool surface.
+            self._system_prompt_cached = f"{block}\n\n{banner}" if block else banner
             return self._system_prompt_cached
         except Exception:
             logger.warning("Corti system_prompt_block fetch failed", exc_info=True)

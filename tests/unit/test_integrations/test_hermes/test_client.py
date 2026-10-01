@@ -32,6 +32,11 @@ def _ok(data: dict[str, Any]) -> httpx.Response:
     return httpx.Response(200, json={"request_id": "t", "data": data})
 
 
+def _interop(payload: dict[str, Any]) -> httpx.Response:
+    """A runtime-interop 200: payload under the standard ``data`` envelope."""
+    return httpx.Response(200, json={"request_id": "req", "data": payload})
+
+
 def _err(
     status: int,
     code: str,
@@ -293,6 +298,128 @@ def test_get_xor_enforced(
     client = make_client(lambda r: _ok({}))
     with pytest.raises(ValueError, match="exactly one"):
         client.get(user_id, agent_id, "default", "default", "episode")
+
+
+# ── runtime interop (standard data envelope) ─────────────────────────────────────────
+
+
+def test_prefetch_envelope_body_and_default_scope_omission(
+    make_client,
+) -> None:
+    seen: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return _interop(
+            {
+                "skipped": None,
+                "block": "## Corti Memory",
+                "display": "",
+                "hits": [],
+                "degraded": [],
+            }
+        )
+
+    client = make_client(handler)
+    resp = client.prefetch("u-1", "default", "default", "hello", "sess-1")
+    assert resp["block"] == "## Corti Memory"
+    assert resp["skipped"] is None
+    body = seen[0]
+    assert body["query"] == "hello"
+    assert body["user_id"] == "u-1"
+    assert body["session_id"] == "sess-1"
+    assert "app_id" not in body
+    assert "project_id" not in body
+
+
+def test_prefetch_reports_skipped(make_client) -> None:
+    client = make_client(
+        lambda r: _interop(
+            {
+                "skipped": "trivial_prompt",
+                "block": "",
+                "display": "",
+                "hits": [],
+                "degraded": [],
+            }
+        )
+    )
+    resp = client.prefetch("u-1", "default", "default", "ok")
+    assert resp["skipped"] == "trivial_prompt"
+
+
+def test_session_start_forwards_scope_and_policy_kwargs(make_client) -> None:
+    seen: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return _interop(
+            {
+                "block": "b",
+                "display": "",
+                "catalog": [],
+                "total_episodes": 0,
+                "last_session": None,
+                "profile_line": "",
+                "degraded": [],
+            }
+        )
+
+    client = make_client(handler)
+    client.session_start(
+        "u-1",
+        "myapp",
+        "myproj",
+        "sess-1",
+        agent_id="a-1",
+        recent_count=3,
+        include_profile=False,
+    )
+    body = seen[0]
+    assert body["user_id"] == "u-1"
+    assert body["agent_id"] == "a-1"
+    assert body["session_id"] == "sess-1"
+    assert body["app_id"] == "myapp"
+    assert body["project_id"] == "myproj"
+    assert body["recent_count"] == 3
+    assert body["include_profile"] is False
+
+
+def test_session_end_forwards_transcript_fields(make_client) -> None:
+    seen: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return _interop(
+            {
+                "stored": True,
+                "summary": {"session_id": "sess-9"},
+                "display": "",
+            }
+        )
+
+    client = make_client(handler)
+    resp = client.session_end(
+        "u-1",
+        "default",
+        "default",
+        "sess-9",
+        first_prompt="hi",
+        turn_count=2,
+    )
+    assert resp["stored"] is True
+    body = seen[0]
+    assert body["session_id"] == "sess-9"
+    assert body["first_prompt"] == "hi"
+    assert body["turn_count"] == 2
+    assert "agent_id" not in body
+
+
+def test_non_object_json_maps_to_internal_error(make_client) -> None:
+    client = make_client(lambda r: httpx.Response(200, json=[1, 2, 3]))
+    with pytest.raises(CortiClientError) as exc:
+        client.flush_session("s", "default", "default")
+    assert exc.value.code == "INTERNAL_ERROR"
 
 
 # ── error mapping ───────────────────────────────────────────────────────────

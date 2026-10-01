@@ -268,6 +268,76 @@ class GetData(TypedDict):
     count: Required[int]
 
 
+# ── runtime-interop shapes ───────────────────────────────────────────────────
+# /session/start, /prefetch and /session/end return their object at the top
+# level (``request_id`` rides on the same object) instead of nesting it under
+# ``data``; these mirror that flat wire shape.
+
+
+class RuntimeHit(TypedDict):
+    """One episode hit shaping an injected interop block."""
+
+    id: Required[str]
+    subject: Required[str]
+    summary: Required[str]
+    timestamp: Required[str]
+    score: Required[float]
+    sender_ids: Required[Sequence[str]]
+
+
+class SessionSummaryItem(TypedDict):
+    """A finished session's digest, as stored by ``/session/end``."""
+
+    session_id: Required[str]
+    user_id: Required[str]
+    app_id: Required[str]
+    project_id: Required[str]
+    agent_id: Required[str | None]
+    first_prompt: Required[str]
+    turn_count: Required[int]
+    started_at: Required[str | None]
+    ended_at: Required[str | None]
+    reason: Required[str | None]
+    recorded_at: Required[str]
+
+
+class PrefetchData(TypedDict):
+    """Payload of ``POST /api/v1/memory/prefetch``.
+
+    A non-``None`` ``skipped`` means "inject nothing" and is a normal
+    outcome, never an error.
+    """
+
+    request_id: Required[str]
+    skipped: Required[Literal["trivial_prompt", "no_relevant_hits"] | None]
+    block: Required[str]
+    display: Required[str]
+    hits: Required[Sequence[RuntimeHit]]
+    degraded: Required[Sequence[str]]
+
+
+class SessionStartData(TypedDict):
+    """Payload of ``POST /api/v1/memory/session/start``."""
+
+    request_id: Required[str]
+    block: Required[str]
+    display: Required[str]
+    catalog: Required[Sequence[RuntimeHit]]
+    total_episodes: Required[int]
+    last_session: Required[SessionSummaryItem | None]
+    profile_line: Required[str]
+    degraded: Required[Sequence[str]]
+
+
+class SessionEndData(TypedDict):
+    """Payload of ``POST /api/v1/memory/session/end``."""
+
+    request_id: Required[str]
+    stored: Required[bool]
+    summary: Required[SessionSummaryItem]
+    display: Required[str]
+
+
 # ── Envelopes and errors ─────────────────────────────────────────────────────
 
 

@@ -13,7 +13,6 @@ from collections.abc import Set
 _BREAKER_THRESHOLD = 5
 _BREAKER_COOLDOWN_SECS = 120.0
 _PREFETCH_WAIT_SECS = 1.5
-_MAX_PREFETCH_CHARS = 4000
 _ADD_BATCH_SIZE = 500
 
 # ── Defaults ───────────────────────────────────────────────────────────────────

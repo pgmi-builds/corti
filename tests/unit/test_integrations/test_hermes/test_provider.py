@@ -6,8 +6,9 @@ behaviour against a fake Corti client. Hermes-only symbols
 ``utils``) are injected via ``sys.modules`` (see ``tests.helpers.
 hermes_stub``) so the plugin bundle imports cleanly without a Hermes
 runtime. No network, no ``respx`` / ``requests_mock`` — the fake client
-records calls and returns canned ``SearchData`` / ``GetData`` /
-``AddResponse`` / ``FlushResponse`` dicts.
+records calls and returns canned endpoint payloads (``SearchData`` /
+``GetData`` / ``AddResponse`` / ``FlushResponse`` / ``PrefetchData`` /
+``SessionStartData`` / ``SessionEndData``) instead of hitting the network.
 """
 
 from __future__ import annotations
@@ -101,6 +102,58 @@ def _empty_get_data() -> dict[str, Any]:
     }
 
 
+_PREFETCH_BLOCK = "## Corti Memory\n- server recall"
+
+
+def _default_prefetch_response(
+    *, skipped: str | None = None, block: str = _PREFETCH_BLOCK
+) -> dict[str, Any]:
+    return {
+        "request_id": "r",
+        "skipped": skipped,
+        "block": block,
+        "display": "",
+        "hits": [],
+        "degraded": [],
+    }
+
+
+def _default_session_start_response(
+    block: str = "## Corti Memory\n- Owner: alice",
+) -> dict[str, Any]:
+    return {
+        "request_id": "r",
+        "block": block,
+        "display": "",
+        "catalog": [],
+        "total_episodes": 0,
+        "last_session": None,
+        "profile_line": "",
+        "degraded": [],
+    }
+
+
+def _default_session_end_response() -> dict[str, Any]:
+    return {
+        "request_id": "r",
+        "stored": True,
+        "summary": {
+            "session_id": "sess-1",
+            "user_id": "hermes-user",
+            "app_id": "default",
+            "project_id": "default",
+            "agent_id": "hermes",
+            "first_prompt": "",
+            "turn_count": 0,
+            "started_at": None,
+            "ended_at": None,
+            "reason": None,
+            "recorded_at": "2026-01-01T00:00:00Z",
+        },
+        "display": "",
+    }
+
+
 class FakeCortiClient:
     """Recording stand-in for ``CortiApiClient``.
 
@@ -115,6 +168,9 @@ class FakeCortiClient:
         get_data: dict[str, Any] | None = None,
         add_response: dict[str, Any] | None = None,
         flush_response: dict[str, Any] | None = None,
+        prefetch_response: dict[str, Any] | None = None,
+        session_start_response: dict[str, Any] | None = None,
+        session_end_response: dict[str, Any] | None = None,
         raise_on: dict[str, str] | None = None,
     ) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
@@ -128,6 +184,21 @@ class FakeCortiClient:
             "status": "accumulated",
         }
         self._flush_response = flush_response or {"status": "extracted"}
+        self._prefetch_response = (
+            prefetch_response
+            if prefetch_response is not None
+            else _default_prefetch_response()
+        )
+        self._session_start_response = (
+            session_start_response
+            if session_start_response is not None
+            else _default_session_start_response()
+        )
+        self._session_end_response = (
+            session_end_response
+            if session_end_response is not None
+            else _default_session_end_response()
+        )
         self._raise_on = raise_on or {}
 
     def _maybe_raise(self, method: str) -> None:
@@ -224,6 +295,86 @@ class FakeCortiClient:
         )
         return self._get_data
 
+    def prefetch(
+        self,
+        user_id: str,
+        app_id: str,
+        project_id: str,
+        query: str,
+        session_id: str | None = None,
+        *,
+        agent_id: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        self._maybe_raise("prefetch")
+        self.calls.append(
+            (
+                "prefetch",
+                {
+                    "user_id": user_id,
+                    "app_id": app_id,
+                    "project_id": project_id,
+                    "query": query,
+                    "session_id": session_id,
+                    "agent_id": agent_id,
+                    **kwargs,
+                },
+            )
+        )
+        return self._prefetch_response
+
+    def session_start(
+        self,
+        user_id: str,
+        app_id: str,
+        project_id: str,
+        session_id: str | None = None,
+        *,
+        agent_id: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        self._maybe_raise("session_start")
+        self.calls.append(
+            (
+                "session_start",
+                {
+                    "user_id": user_id,
+                    "app_id": app_id,
+                    "project_id": project_id,
+                    "session_id": session_id,
+                    "agent_id": agent_id,
+                    **kwargs,
+                },
+            )
+        )
+        return self._session_start_response
+
+    def session_end(
+        self,
+        user_id: str,
+        app_id: str,
+        project_id: str,
+        session_id: str,
+        *,
+        agent_id: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        self._maybe_raise("session_end")
+        self.calls.append(
+            (
+                "session_end",
+                {
+                    "user_id": user_id,
+                    "app_id": app_id,
+                    "project_id": project_id,
+                    "session_id": session_id,
+                    "agent_id": agent_id,
+                    **kwargs,
+                },
+            )
+        )
+        return self._session_end_response
+
     def close(self) -> None:
         self.closed = True
         self.calls.append(("close", {}))
@@ -247,12 +398,13 @@ def make_provider(plugin, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         *,
         fake: FakeCortiClient | None = None,
         config: dict[str, Any] | None = None,
+        session_id: str = "sess-1",
         **init_kwargs: Any,
     ):
         if config is not None:
             (tmp_path / "corti.json").write_text(json.dumps(config))
         prov = plugin.CortiMemoryProvider()
-        prov.initialize("sess-1", **init_kwargs)
+        prov.initialize(session_id, **init_kwargs)
         if fake is not None:
             prov._client = fake
         return prov
@@ -318,8 +470,8 @@ def test_initialize_bad_url_leaves_client_none(
 # ── prefetch ────────────────────────────────────────────────────────────────
 
 
-def test_prefetch_cache_hit_returns_formatted_context(make_provider):
-    fake = FakeCortiClient(search_data=_search_data_with_episode())
+def test_prefetch_cache_hit_returns_cached_block(make_provider):
+    fake = FakeCortiClient()
     prov = make_provider(fake=fake)
     # Prime the cache: simulate a completed prefetch for this query.
     prov._prefetch_query = "tea"
@@ -328,36 +480,67 @@ def test_prefetch_cache_hit_returns_formatted_context(make_provider):
     out = prov.prefetch("tea")
     assert out == "## Corti Memory\ncached"
     # The worker must not have been started (cache hit).
-    assert not any(c[0] == "search" for c in fake.calls)
+    assert not any(c[0] == "prefetch" for c in fake.calls)
     prov.shutdown()
 
 
-def test_prefetch_first_turn_starts_worker_and_joins(make_provider):
-    fake = FakeCortiClient(search_data=_search_data_with_episode())
+def test_prefetch_delegates_to_server_and_joins(make_provider):
+    fake = FakeCortiClient()
     prov = make_provider(fake=fake)
     out = prov.prefetch("tea")
-    assert "tea" in out.lower() or "corti" in out.lower()
-    assert any(c[0] == "search" for c in fake.calls)
+    # The server composes the block; the adapter injects it verbatim.
+    assert out == _PREFETCH_BLOCK
+    calls = [c for c in fake.calls if c[0] == "prefetch"]
+    assert len(calls) == 1
+    body = calls[0][1]
+    assert body["query"] == "tea"
+    assert body["user_id"] == "hermes-user"
+    assert body["app_id"] == "default"
+    assert body["project_id"] == "default"
+    assert body["session_id"] == "sess-1"
+    assert body["agent_id"] == "hermes"
+    # Recall policy (method / top_k / min_score) stays server-side.
+    assert "method" not in body
+    assert "top_k" not in body
+    assert "min_score" not in body
+    # The per-turn path no longer runs its own search.
+    assert not any(c[0] == "search" for c in fake.calls)
     # The prefetch thread has been joined by prefetch() itself.
     assert prov._prefetch_thread is not None
     assert not prov._prefetch_thread.is_alive()
     prov.shutdown()
 
 
-def test_prefetch_empty_results_returns_empty_string(make_provider):
-    fake = FakeCortiClient(search_data=_empty_search_data())
+def test_prefetch_skipped_returns_empty_string(make_provider):
+    fake = FakeCortiClient(
+        prefetch_response=_default_prefetch_response(
+            skipped="no_relevant_hits", block=""
+        )
+    )
     prov = make_provider(fake=fake)
     assert prov.prefetch("nothing") == ""
     prov.shutdown()
 
 
+def test_prefetch_trivial_prompt_skip_returns_empty_string(make_provider):
+    # ``skipped`` is a normal outcome; even a stray block is not injected.
+    fake = FakeCortiClient(
+        prefetch_response=_default_prefetch_response(
+            skipped="trivial_prompt", block="should not appear"
+        )
+    )
+    prov = make_provider(fake=fake)
+    assert prov.prefetch("ok") == ""
+    prov.shutdown()
+
+
 def test_prefetch_breaker_open_returns_empty(make_provider):
-    fake = FakeCortiClient(search_data=_search_data_with_episode())
+    fake = FakeCortiClient()
     prov = make_provider(fake=fake)
     prov._consecutive_failures = 5
     prov._breaker_open_until = _now_plus(1000.0)
     assert prov.prefetch("tea") == ""
-    assert not any(c[0] == "search" for c in fake.calls)
+    assert not any(c[0] == "prefetch" for c in fake.calls)
     prov.shutdown()
 
 
@@ -410,12 +593,16 @@ def test_sync_turn_skips_when_breaker_open(make_provider):
 # ── on_session_end ──────────────────────────────────────────────────────────
 
 
-def test_on_session_end_flushes_and_closes_client(make_provider):
+def test_on_session_end_flushes_records_digest_and_closes_client(make_provider):
     fake = FakeCortiClient()
     prov = make_provider(fake=fake)
     prov.sync_turn("hi", "hello")
     prov.on_session_end([])
     assert any(c[0] == "flush_session" for c in fake.calls)
+    end_calls = [c for c in fake.calls if c[0] == "session_end"]
+    assert len(end_calls) == 1
+    assert end_calls[0][1]["session_id"] == "sess-1"
+    assert end_calls[0][1]["user_id"] == "hermes-user"
     assert fake.closed is True
     assert prov._client is None
 
@@ -567,8 +754,34 @@ def test_get_tool_schemas_openai_shape(make_provider):
     prov.shutdown()
 
 
-def test_system_prompt_block_mentions_mem_search(make_provider):
+def test_system_prompt_block_uses_server_block_plus_local_banner(make_provider):
+    fake = FakeCortiClient(
+        session_start_response=_default_session_start_response(
+            "## Corti Memory\n- Owner: alice"
+        )
+    )
+    prov = make_provider(fake=fake)
+    block = prov.system_prompt_block()
+    # The server's memory block is injected verbatim...
+    assert "- Owner: alice" in block
+    # ...and the adapter adds the sentence naming its own tool surface.
+    assert "mem_search" in block
+    assert any(c[0] == "session_start" for c in fake.calls)
+    prov.shutdown()
+
+
+def test_system_prompt_block_falls_back_to_banner_when_unreachable(make_provider):
+    fake = FakeCortiClient(raise_on={"session_start": "EXTERNAL_SERVICE_UNAVAILABLE"})
+    prov = make_provider(fake=fake)
+    block = prov.system_prompt_block()
+    assert "mem_search" in block
+    assert "Owner: alice" not in block
+    prov.shutdown()
+
+
+def test_system_prompt_block_falls_back_to_banner_without_client(make_provider):
     prov = make_provider()
+    prov._client = None
     block = prov.system_prompt_block()
     assert "corti" in block.lower()
     assert "mem_search" in block
@@ -629,6 +842,39 @@ def test_is_transient_classification(plugin):
     assert plugin.CortiMemoryProvider._is_transient("INTERNAL_ERROR") is True
     assert plugin.CortiMemoryProvider._is_transient("CLIENT_CLOSED") is True
     assert plugin.CortiMemoryProvider._is_transient("INVALID_INPUT") is False
+
+
+# ── cron guard ──────────────────────────────────────────────────────────────
+
+
+def test_cron_platform_is_memory_silent(make_provider):
+    fake = FakeCortiClient()
+    prov = make_provider(fake=fake, platform="cron")
+    assert prov._cron_disabled is True
+    assert prov.prefetch("what about tea") == ""
+    assert prov.system_prompt_block() == ""
+    assert prov.get_tool_schemas() == []
+    out = prov.handle_tool_call("mem_search", {"query": "tea"})
+    assert "error" in json.loads(out)
+    prov.sync_turn("x", "y")
+    assert prov._sync_thread is None
+    prov.on_memory_write("add", "user", "fact")
+    assert prov._mirror_thread is None
+    prov.on_session_end([])
+    # No read or write hook may reach the client for a cron session.
+    assert not fake.calls
+    assert fake.closed is False
+    prov.shutdown()
+
+
+def test_cron_session_id_prefix_is_memory_silent(make_provider):
+    fake = FakeCortiClient()
+    prov = make_provider(fake=fake, session_id="cron_watch_42")
+    assert prov._cron_disabled is True
+    assert prov.prefetch("tea") == ""
+    assert prov.get_tool_schemas() == []
+    assert not fake.calls
+    prov.shutdown()
 
 
 # ── backup_paths ────────────────────────────────────────────────────────────

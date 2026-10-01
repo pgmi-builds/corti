@@ -29,7 +29,10 @@ from ._types import (
     FlushResponse,
     GetData,
     MessageItem,
+    PrefetchData,
     SearchData,
+    SessionEndData,
+    SessionStartData,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,6 +43,9 @@ _ADD_PATH = "/api/v1/memory/add"
 _FLUSH_PATH = "/api/v1/memory/flush"
 _SEARCH_PATH = "/api/v1/memory/search"
 _GET_PATH = "/api/v1/memory/get"
+_SESSION_START_PATH = "/api/v1/memory/session/start"
+_PREFETCH_PATH = "/api/v1/memory/prefetch"
+_SESSION_END_PATH = "/api/v1/memory/session/end"
 
 # Future-result backstop: httpx (timeout=self._timeout) fires first; the extra
 # grace ensures the mapped httpx.TimeoutException wins over a bare
@@ -57,6 +63,18 @@ _SEARCH_KWARGS = (
     "filters",
 )
 _GET_KWARGS = ("page", "page_size", "sort_by", "sort_order", "filters")
+
+# Optional policy params forwarded to the runtime-interop endpoints (None =>
+# omitted, so the server's own defaults apply).
+_SESSION_START_KWARGS = (
+    "recency_window",
+    "recency_sample",
+    "recent_count",
+    "max_chars",
+    "include_profile",
+)
+_PREFETCH_KWARGS = ("method", "top_k", "min_score", "max_chars", "include_profile")
+_SESSION_END_KWARGS = ("first_prompt", "turn_count", "started_at", "ended_at", "reason")
 
 
 class CortiApiClient:
@@ -150,7 +168,14 @@ class CortiApiClient:
                 f"HTTP {resp.status_code}: non-JSON response",
                 code="INTERNAL_ERROR",
             ) from exc
-        data = envelope.get("data") if isinstance(envelope, dict) else None
+        if not isinstance(envelope, dict):
+            raise CortiClientError(
+                "response is not a JSON object",
+                code="INTERNAL_ERROR",
+            )
+        # Every 200 wraps its payload in ``{"request_id": ..., "data": {...}}``
+        # (docs/api.md), so the payload is always one level down.
+        data = envelope.get("data")
         if not isinstance(data, dict):
             raise CortiClientError(
                 "response envelope missing data object",
@@ -195,6 +220,28 @@ class CortiApiClient:
                 "exactly one of user_id / agent_id must be provided",
             )
         return "user_id" if user_id is not None else "agent_id"
+
+    def _interop_body(
+        self,
+        user_id: str,
+        app_id: str,
+        project_id: str,
+        agent_id: str | None,
+        session_id: str | None,
+    ) -> dict[str, Any]:
+        """Shared body for the runtime-interop endpoints.
+
+        ``user_id`` is required there and ``agent_id`` is an optional sender
+        tag (not an owner selector as on ``/search``); ``session_id`` is
+        omitted when unknown so the server applies its own default.
+        """
+        body: dict[str, Any] = {"user_id": user_id}
+        if agent_id is not None:
+            body["agent_id"] = agent_id
+        if session_id is not None:
+            body["session_id"] = session_id
+        self._apply_scope(body, app_id, project_id)
+        return body
 
     # ── public API ──────────────────────────────────────────────────────────
 
@@ -287,6 +334,80 @@ class CortiApiClient:
             if key in kwargs and kwargs[key] is not None:
                 body[key] = kwargs[key]
         return self._run(self._post(_GET_PATH, body))  # type: ignore[return-value]
+
+    def session_start(
+        self,
+        user_id: str,
+        app_id: str,
+        project_id: str,
+        session_id: str | None = None,
+        *,
+        agent_id: str | None = None,
+        **kwargs: Any,
+    ) -> SessionStartData:
+        """POST /api/v1/memory/session/start — the once-per-session block.
+
+        The server owns every threshold and returns a finished ``block`` to
+        inject verbatim. Accepted kwargs: recency_window, recency_sample,
+        recent_count, max_chars, include_profile.
+        """
+        body = self._interop_body(user_id, app_id, project_id, agent_id, session_id)
+        for key in _SESSION_START_KWARGS:
+            if key in kwargs and kwargs[key] is not None:
+                body[key] = kwargs[key]
+        return self._run(  # type: ignore[return-value]
+            self._post(_SESSION_START_PATH, body)
+        )
+
+    def prefetch(
+        self,
+        user_id: str,
+        app_id: str,
+        project_id: str,
+        query: str,
+        session_id: str | None = None,
+        *,
+        agent_id: str | None = None,
+        **kwargs: Any,
+    ) -> PrefetchData:
+        """POST /api/v1/memory/prefetch — the once-per-turn block.
+
+        A non-``None`` ``skipped`` means "inject nothing" and is a normal
+        outcome, not an error. Accepted kwargs: method, top_k, min_score,
+        max_chars, include_profile.
+        """
+        body = self._interop_body(user_id, app_id, project_id, agent_id, session_id)
+        body["query"] = query
+        for key in _PREFETCH_KWARGS:
+            if key in kwargs and kwargs[key] is not None:
+                body[key] = kwargs[key]
+        return self._run(  # type: ignore[return-value]
+            self._post(_PREFETCH_PATH, body)
+        )
+
+    def session_end(
+        self,
+        user_id: str,
+        app_id: str,
+        project_id: str,
+        session_id: str,
+        *,
+        agent_id: str | None = None,
+        **kwargs: Any,
+    ) -> SessionEndData:
+        """POST /api/v1/memory/session/end — record the session digest.
+
+        ``session_id`` is required (a digest with no session key cannot be
+        matched later). Accepted kwargs: first_prompt, turn_count, started_at,
+        ended_at, reason.
+        """
+        body = self._interop_body(user_id, app_id, project_id, agent_id, session_id)
+        for key in _SESSION_END_KWARGS:
+            if key in kwargs and kwargs[key] is not None:
+                body[key] = kwargs[key]
+        return self._run(  # type: ignore[return-value]
+            self._post(_SESSION_END_PATH, body)
+        )
 
     def close(self) -> None:
         """Shut down the loop thread and close the httpx client."""
