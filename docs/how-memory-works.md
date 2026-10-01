@@ -18,6 +18,7 @@ This is the narrative companion to the reference docs: see
 - [The cascade daemon](#the-cascade-daemon)
 - [The Offline Memory Engine (OME)](#the-offline-memory-engine-ome)
 - [Consistency model](#consistency-model)
+- [Degradation when a provider is down](#degradation-when-a-provider-is-down)
 - [Zero external services](#zero-external-services)
 - [Operating it](#operating-it)
 
@@ -277,6 +278,31 @@ entry needs re-embedding; an LSN watermark (in `system.db`) orders
 rebuilds; the durable `md_change_state` queue is the replayable audit
 trail.
 
+## Degradation when a provider is down
+
+Recall has three independent legs — keyword/BM25, vector, and rerank — and
+only the first needs nothing external. Embedding and rerank are configured
+against paid providers, so an outage there (arrears, rate limit, network) is
+expected in normal operation. The rule is that such an outage **degrades
+recall instead of failing the request**.
+
+| Leg that is down | What happens |
+|---|---|
+| embedding (query) | `hybrid` runs the sparse leg alone; `vector` falls back to lexical recall; `agentic` degrades to the hybrid hierarchy. Logged once, then a 300 s cooldown stops re-paying the provider timeout on every query. |
+| embedding (ingest) | rows are written with `vector = NULL` — the memory is stored, markdown-indexed and BM25-searchable — and the next cascade pass backfills the vector. |
+| rerank | the pre-rerank order is kept. The candidates already carry BM25 / cosine / RRF scores, so the answer is ranked worse, not missing. |
+
+A *missing* provider is different from an unavailable one: `method="vector"`
+with no `[embedding]` configured is still a configuration error, because that
+method is meaningless without it. `hybrid` and `agentic` are multi-leg and
+degrade in that case too.
+
+Search results are therefore never a 503 for a provider outage. The relevant
+log lines are `search_embedding_unavailable_degrading_to_keyword`,
+`vector_search_degraded_to_keyword`,
+`rerank_unavailable_keeping_first_stage_order`, and
+`cascade_embedding_unavailable_keeping_rows_unvectorised`.
+
 ## Zero external services
 
 No database server, message broker, or vector service to run. Vector ANN,
@@ -287,8 +313,10 @@ into git.
 
 !!! note
     There is no automatic "grep over markdown" search fallback today — if
-    the Postgres index is unavailable, rebuild it from markdown (it is
+    the Postgres index itself is unavailable, rebuild it from markdown (it is
     derived and disposable) rather than relying on a degraded search path.
+    This is separate from a *provider* outage, which degrades the ranking
+    while the index keeps answering (see [Degradation](#degradation-when-a-provider-is-down)).
 
 ## Operating it
 

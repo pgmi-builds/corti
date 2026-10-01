@@ -32,11 +32,10 @@ from __future__ import annotations
 import abc
 import asyncio
 import dataclasses
-import time
 from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 
-from corti.component.embedding import EmbeddingServiceError
+from corti.component.embedding import EmbeddingServiceError, EmbedGuard
 from corti.core.observability.logging import get_logger
 from corti.core.persistence import MarkdownReader, StructuredEntry
 
@@ -48,37 +47,10 @@ from .base import Handler
 logger = get_logger(__name__)
 
 
-class EmbedGuard:
-    """Cooldown gate in front of the embedding provider.
-
-    The scanner re-runs a file whenever its mtime moves, and a file holding
-    rows that still lack vectors re-attempts those embeddings on every run.
-    Without a gate, an embedder outage turns each 30 s sweep into thousands
-    of doomed HTTP calls. After a failure the gate opens for ``cooldown``
-    seconds and callers short-circuit to ``None``.
-
-    Uses :func:`time.monotonic` (not wall-clock) so a system clock change
-    cannot leave the gate stuck open.
-    """
-
-    def __init__(self, cooldown_seconds: float = 300.0) -> None:
-        self.cooldown_seconds = cooldown_seconds
-        self._open_until: float = 0.0
-
-    def is_open(self) -> bool:
-        """True while the gate is closed to traffic (provider believed down)."""
-        return time.monotonic() < self._open_until
-
-    def record_failure(self) -> None:
-        """Open the gate for one cooldown window."""
-        self._open_until = time.monotonic() + self.cooldown_seconds
-
-    def record_success(self) -> None:
-        """Close the gate — the provider answered."""
-        self._open_until = 0.0
-
-
 # Process-wide gate: every daily-log handler shares one embedding provider.
+# The class lives in :mod:`corti.component.embedding` so the read path can
+# gate the same provider with its own instance; the name is re-exported here
+# for callers that already reach for it through this module.
 _embed_guard = EmbedGuard()
 
 
@@ -117,6 +89,11 @@ class BaseDailyLogHandler(Handler):
     kind: ClassVar[str] = ""
     db_repo: ClassVar[Any] = None
     content_change_keys: ClassVar[tuple[str, ...]] = ()
+    # Composite conflict key for the index rows. ``id`` alone is
+    # ``<owner_id>_<entry_id>`` and an entry_id is unique only inside one
+    # memory space, so the scope has to travel with it — otherwise two
+    # app_id/project_id partitions upsert onto each other's rows.
+    db_upsert_key: ClassVar[tuple[str, ...]] = ("app_id", "project_id", "id")
 
     def _content_sha256(self, structured: StructuredEntry) -> str:
         """Hash the content-bearing subset of one entry's inline+sections.
@@ -317,7 +294,7 @@ class BaseDailyLogHandler(Handler):
     ) -> None:
         """Flush upserts and deletes to Postgres."""
         if to_upsert:
-            await self.db_repo.upsert(to_upsert)
+            await self.db_repo.upsert(to_upsert, by=self.db_upsert_key)
         if to_delete_ids:
             in_list = ", ".join(f"'{eid}'" for eid in to_delete_ids)
             await self.db_repo.delete(

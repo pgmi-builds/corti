@@ -253,17 +253,23 @@ class PgRepoBase:
         self,
         records: Sequence[T],
         *,
-        by: str = "id",
+        by: str | Sequence[str] = "id",
     ) -> None:
-        """Upsert records keyed by ``by`` (PK column, default ``"id"``).
+        """Upsert records keyed by ``by`` (default ``"id"``).
 
-        ``ON CONFLICT (by) DO UPDATE`` — matching rows are replaced wholesale,
-        non-matching rows inserted. Equivalent to an upsert with merge semantics.
+        ``by`` may name a **composite** key. The daily-log tables use
+        ``("app_id", "project_id", "id")``: an ``id`` is
+        ``<owner_id>_<entry_id>`` and an entry_id is unique only inside one
+        memory space, so keying on ``id`` alone lets a second app_id /
+        project_id partition overwrite the first one's rows. Every named
+        column is excluded from the ``DO UPDATE`` clause so the key itself
+        can never be rewritten.
         """
         if not records:
             return
+        keys = (by,) if isinstance(by, str) else tuple(by)
         cols = self._writable_columns()
-        cols_no_pk = [c for c in cols if c != by]
+        cols_no_pk = [c for c in cols if c not in keys]
         col_list = ", ".join(cols)
         placeholders = ", ".join(["%s"] * len(cols))
         set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in cols_no_pk)
@@ -274,7 +280,7 @@ class PgRepoBase:
 
         sql = (
             f"INSERT INTO {self.table_name} ({col_list}) VALUES ({placeholders}) "
-            f"ON CONFLICT ({by}) DO UPDATE SET {set_clause}"
+            f"ON CONFLICT ({', '.join(keys)}) DO UPDATE SET {set_clause}"
         )
 
         lock = self._write_lock(self.table_name)

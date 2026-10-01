@@ -24,12 +24,35 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING
 
 from corti.component.rerank import RerankProvider
+from corti.core.errors import RerankServiceError
+from corti.core.observability.logging import get_logger
 from everalgo.rank.fusion import rrf
 from everalgo.rank.protocols import RerankFn, RetrieveFn
 from everalgo.types import Candidate
 
 if TYPE_CHECKING:
     from .recall import KindRecaller
+
+
+logger = get_logger(__name__)
+
+
+def _keep_first_stage_order(items: list[Candidate], exc: Exception) -> list[Candidate]:
+    """Fall back to the pre-rerank order when the cross-encoder is down.
+
+    Reranking *reorders* candidates that already carry a first-stage score
+    (BM25 / cosine / RRF), so an unavailable provider means a worse order,
+    not a missing answer. Returning the input unchanged keeps recall alive
+    and lets the caller's own truncation (``round1_rerank_top_n``,
+    ``top_k``) still apply; the previous behaviour turned a rerank outage
+    into a failure for the whole search.
+    """
+    logger.warning(
+        "rerank_unavailable_keeping_first_stage_order",
+        candidates=len(items),
+        error=str(exc),
+    )
+    return items
 
 
 def build_rerank_fn(
@@ -63,7 +86,10 @@ def build_rerank_fn(
         if not items:
             return []
         passages = [str(c.metadata.get(text_field, "")) for c in items]
-        results = await provider.rerank(query, passages, instruction=instruction)
+        try:
+            results = await provider.rerank(query, passages, instruction=instruction)
+        except RerankServiceError as exc:
+            return _keep_first_stage_order(items, exc)
         out: list[Candidate] = []
         for r in results:
             if not 0 <= r.index < len(items):
@@ -111,9 +137,12 @@ def build_skill_rerank_fn(provider: RerankProvider) -> RerankFn:
         if not items:
             return []
         passages = [_format_skill_passage(c) for c in items]
-        results = await provider.rerank(
-            query, passages, instruction=_SKILL_RERANK_INSTRUCTION
-        )
+        try:
+            results = await provider.rerank(
+                query, passages, instruction=_SKILL_RERANK_INSTRUCTION
+            )
+        except RerankServiceError as exc:
+            return _keep_first_stage_order(items, exc)
         out: list[Candidate] = []
         for r in results:
             if not 0 <= r.index < len(items):

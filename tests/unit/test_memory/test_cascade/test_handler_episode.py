@@ -55,6 +55,7 @@ class _FakeEpisodeRepo:
 
     def __init__(self) -> None:
         self.upserts: list[list[Episode]] = []
+        self.upsert_keys: list[object] = []
         self.deletes: list[str] = []
         self.rows: list[Episode] = []
 
@@ -74,8 +75,9 @@ class _FakeEpisodeRepo:
             if r.md_path == md_path
         }
 
-    async def upsert(self, rows: list[Episode]) -> None:
+    async def upsert(self, rows: list[Episode], *, by: object = "id") -> None:
         self.upserts.append(list(rows))
+        self.upsert_keys.append(by)
         # Reflect into ``self.rows`` so a follow-up find_where sees the state.
         by_id = {r.id: r for r in self.rows}
         for r in rows:
@@ -367,3 +369,23 @@ async def test_vectorless_row_is_reembedded_on_next_pass(
 
 
 _: Any = None
+
+
+async def test_upsert_conflict_key_is_space_aware(
+    memory_root: MemoryRoot, fake_repo: _FakeEpisodeRepo
+) -> None:
+    """The index rows are keyed by ``(app_id, project_id, id)``.
+
+    ``id`` is ``<owner_id>_<entry_id>`` and an entry_id is unique only
+    *inside* one memory space — every ``app_id``/``project_id`` partition
+    starts its daily sequence at 1. Keying the upsert on ``id`` alone made a
+    second space overwrite the first one's rows (the ``test`` space's canary
+    replaced ``shared-agent-memory`` entries with the same daily sequence).
+    """
+    writer = EpisodeWriter(memory_root)
+    rel = await _write_one_entry(writer, "u1", "hello world")
+
+    handler, _ = _build_handler(memory_root)
+    await handler.handle_added_or_modified(rel)
+
+    assert fake_repo.upsert_keys == [("app_id", "project_id", "id")]

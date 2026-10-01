@@ -21,6 +21,10 @@ from typing import Any, ClassVar
 
 import pytest
 
+import corti.memory.search.manager as manager_mod
+from corti.component.embedding import EmbeddingServiceError, EmbedGuard
+from corti.core.errors import RerankServiceError
+from corti.memory.search.callbacks import build_rerank_fn
 from corti.memory.search.dto import SearchMethod, SearchRequest
 from corti.memory.search.manager import SearchManager
 from everalgo.types import Candidate, FactCandidate
@@ -382,10 +386,24 @@ async def test_vector_returns_empty_when_no_facts() -> None:
 # ── HYBRID / AGENTIC: prerequisite errors ──────────────────────────────
 
 
-async def test_hybrid_requires_embedding() -> None:
+async def test_hybrid_without_embedding_degrades_to_keyword() -> None:
+    """HYBRID is multi-leg: a missing embedder is not fatal.
+
+    The keyword leg needs no provider, so an outage (or an unconfigured
+    ``[embedding]``) must degrade to BM25 rather than reject the request —
+    the failure mode this guards against is one dead provider taking down
+    search entirely.
+    """
+    mgr = _build_manager()
+    resp = await mgr.search(_user_req(method=SearchMethod.HYBRID))
+    assert resp.data.episodes == []  # stub recallers → empty, but no raise
+
+
+async def test_vector_without_embedding_still_fails_fast() -> None:
+    """``method='vector'`` without a provider is a configuration error."""
     mgr = _build_manager()
     with pytest.raises(RuntimeError, match="embedding"):
-        await mgr.search(_user_req(method=SearchMethod.HYBRID))
+        await mgr.search(_user_req(method=SearchMethod.VECTOR))
 
 
 async def test_hybrid_does_not_require_llm_by_default() -> None:
@@ -510,3 +528,106 @@ async def test_top_k_minus_one_caps_at_100() -> None:
     mgr = _build_manager(episode_sparse=rows)
     resp = await mgr.search(_user_req(top_k=-1))
     assert len(resp.data.episodes) == 100
+
+
+# ── Degradation: a dead provider must not take down search ──────────────
+#
+# The keyword/BM25 leg needs no external component. Every other leg is an
+# optimisation over it, so when one is unavailable the request degrades to
+# the best available route instead of returning 503.
+
+
+class _FailingEmbedding:
+    """Embedder whose provider is in arrears — every call fails."""
+
+    dim = 4
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def embed(self, text: str) -> list[float]:
+        self.calls += 1
+        raise EmbeddingServiceError("Arrearage: account not in good standing")
+
+    async def embed_batch(self, texts: Sequence[str]) -> list[list[float]]:
+        self.calls += 1
+        raise EmbeddingServiceError("Arrearage: account not in good standing")
+
+
+class _FailingReranker:
+    """Cross-encoder whose provider rejects every request."""
+
+    async def rerank(
+        self,
+        query: str,
+        documents: Sequence[str],
+        *,
+        instruction: str | None = None,
+    ) -> list[Any]:
+        raise RerankServiceError("rerank upstream error (HTTP 400)")
+
+
+@pytest.fixture(autouse=True)
+def _fresh_embed_guard(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give every test a closed cooldown gate.
+
+    ``_search_embed_guard`` is process-wide; a test that trips it would
+    otherwise short-circuit every later test's embedding call.
+    """
+    monkeypatch.setattr(manager_mod, "_search_embed_guard", EmbedGuard())
+    monkeypatch.setattr(manager_mod, "_warned_missing_embedding", False)
+
+
+async def test_hybrid_with_dead_embedder_returns_keyword_hits() -> None:
+    """HYBRID with a failing embedder answers from BM25 alone."""
+    mgr = _build_manager(
+        episode_sparse=[_episode_row("ep_sparse")],
+        embedding=_FailingEmbedding(),
+    )
+    resp = await mgr.search(_user_req(method=SearchMethod.HYBRID))
+    assert [e.id for e in resp.data.episodes] == ["ep_sparse"]
+
+
+async def test_vector_with_dead_embedder_falls_back_to_keyword() -> None:
+    """``method='vector'`` degrades to the lexical route, not an empty page."""
+    mgr = _build_manager(
+        episode_sparse=[_episode_row("ep_sparse")],
+        episode_dense=[_episode_row("ep_dense")],
+        embedding=_FailingEmbedding(),
+    )
+    resp = await mgr.search(_user_req(method=SearchMethod.VECTOR))
+    assert [e.id for e in resp.data.episodes] == ["ep_sparse"]
+
+
+async def test_dead_embedder_opens_cooldown_after_one_attempt() -> None:
+    """The second query inside the cooldown window never reaches the provider."""
+    embedding = _FailingEmbedding()
+    mgr = _build_manager(embedding=embedding)
+    assert await mgr._embed_query("one") == []
+    assert embedding.calls == 1
+    assert await mgr._embed_query("two") == []
+    assert embedding.calls == 1
+
+
+async def test_agentic_with_dead_embedder_degrades_to_fused_path() -> None:
+    """AGENTIC needs all three components; without a vector it falls through."""
+    mgr = _build_manager(
+        episode_sparse=[_episode_row("ep_sparse")],
+        embedding=_FailingEmbedding(),
+        reranker=_FailingReranker(),
+        llm_client=object(),
+    )
+    resp = await mgr.search(_user_req(method=SearchMethod.AGENTIC))
+    assert [e.id for e in resp.data.episodes] == ["ep_sparse"]
+
+
+async def test_rerank_failure_keeps_first_stage_order() -> None:
+    """A rerank outage leaves the first-stage order (and scores) intact."""
+    candidates = [
+        _episode_row("ep_first", score=0.9),
+        _episode_row("ep_second", score=0.5),
+    ]
+    rerank_fn = build_rerank_fn(_FailingReranker(), text_field="episode")
+    out = await rerank_fn("query", candidates)
+    assert [c.id for c in out] == ["ep_first", "ep_second"]
+    assert [c.score for c in out] == [0.9, 0.5]

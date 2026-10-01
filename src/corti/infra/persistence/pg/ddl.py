@@ -119,7 +119,7 @@ def _gin_index_lines(table: str, tsv_cols: list[str]) -> str:
 
 _EPISODE_DDL = textwrap.dedent(f"""\
     CREATE TABLE IF NOT EXISTS episode (
-        id              text PRIMARY KEY,
+        id              text NOT NULL,
         entry_id        text NOT NULL,
         {_DAILY_LOG_COMMON.format(dim=VECTOR_DIM)},
         subject         text,
@@ -129,24 +129,31 @@ _EPISODE_DDL = textwrap.dedent(f"""\
         {_tsv_column("episode_tokens")},
         subject_vector  vector({VECTOR_DIM}),
         created_at      timestamptz NOT NULL DEFAULT now(),
-        updated_at      timestamptz NOT NULL DEFAULT now()
+        updated_at      timestamptz NOT NULL DEFAULT now(),
+        -- ``id`` is ``<owner_id>_<entry_id>``, and an entry_id is unique only
+        -- inside one memory space (every space starts its daily sequence at
+        -- 1). Keying on ``id`` alone let one app_id/project_id partition
+        -- overwrite another's rows on upsert — silently, since the cascade
+        -- only reports a count. The scope therefore belongs in the key.
+        PRIMARY KEY (app_id, project_id, id)
     );""")
 
 _ATOMIC_FACT_DDL = textwrap.dedent(f"""\
     CREATE TABLE IF NOT EXISTS atomic_fact (
-        id              text PRIMARY KEY,
+        id              text NOT NULL,
         entry_id        text NOT NULL,
         {_DAILY_LOG_COMMON.format(dim=VECTOR_DIM)},
         fact            text NOT NULL,
         fact_tokens     text NOT NULL DEFAULT '',
         {_tsv_column("fact_tokens")},
         created_at      timestamptz NOT NULL DEFAULT now(),
-        updated_at      timestamptz NOT NULL DEFAULT now()
+        updated_at      timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (app_id, project_id, id)
     );""")
 
 _FORESIGHT_DDL = textwrap.dedent(f"""\
     CREATE TABLE IF NOT EXISTS foresight (
-        id              text PRIMARY KEY,
+        id              text NOT NULL,
         entry_id        text NOT NULL,
         {_DAILY_LOG_COMMON.format(dim=VECTOR_DIM)},
         start_time      timestamptz,
@@ -159,7 +166,8 @@ _FORESIGHT_DDL = textwrap.dedent(f"""\
         evidence_tokens text,
         {_tsv_column("evidence_tokens")},
         created_at      timestamptz NOT NULL DEFAULT now(),
-        updated_at      timestamptz NOT NULL DEFAULT now()
+        updated_at      timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (app_id, project_id, id)
     );""")
 
 _KNOWLEDGE_TOPIC_DDL = textwrap.dedent(f"""\

@@ -31,6 +31,7 @@ import json
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+from corti.component.embedding import EmbeddingServiceError, EmbedGuard
 from corti.component.utils.datetime import to_display_tz
 from corti.core.observability.logging import get_logger
 from corti.core.observability.tracing import gen_request_id
@@ -74,6 +75,28 @@ if TYPE_CHECKING:
     )
 
 logger = get_logger(__name__)
+
+# Read-path cooldown gate. The cascade owns its own instance on the write
+# path; search degrades rather than failing, but it still must not pay the
+# provider's timeout on every query while the provider is known to be down.
+_search_embed_guard = EmbedGuard()
+
+_warned_missing_embedding = False
+
+
+def _warn_missing_embedding_once() -> None:
+    """Report an unconfigured ``[embedding]`` provider once per process.
+
+    Search degrades to keyword rather than failing, so without this the
+    misconfiguration would be invisible — but it is emitted once so it does
+    not land on every query's log line.
+    """
+    global _warned_missing_embedding
+    if _warned_missing_embedding:
+        return
+    _warned_missing_embedding = True
+    logger.warning("search_embedding_not_configured_degrading_to_keyword")
+
 
 # Recall pool sizing — matches the legacy enterprise constants
 # ``DEFAULT_RECALL_MULTIPLIER`` / ``DEFAULT_TOPK_LIMIT``.
@@ -186,24 +209,31 @@ class SearchManager:
     async def _search_episodes(
         self, req: SearchRequest, where: str
     ) -> list[SearchEpisodeItem]:
+        top_k = self._top_k(req.top_k)
+
         if req.method == SearchMethod.AGENTIC:
-            return await search_episodes_agentic(
-                req.query,
-                owner_id=req.owner_id,
-                where=where,
-                app_id=req.app_id,
-                project_id=req.project_id,
-                episode_recaller=self._ep,
-                atomic_fact_recaller=self._fact,
-                embed_query_fn=self._embedding.embed,  # type: ignore[union-attr]
-                reranker=self._reranker,  # type: ignore[arg-type]
-                llm=self._llm,  # type: ignore[arg-type]
-                top_k=self._top_k(req.top_k),
-            )
+            # AGENTIC is the only method that needs all three components
+            # (embedder + cross-encoder + LLM). Without a query vector there
+            # is nothing to run the agentic loop over, so degrade to the
+            # HYBRID hierarchy — sparse recall alone still answers.
+            if await self._embed_query(req.query):
+                return await search_episodes_agentic(
+                    req.query,
+                    owner_id=req.owner_id,
+                    where=where,
+                    app_id=req.app_id,
+                    project_id=req.project_id,
+                    episode_recaller=self._ep,
+                    atomic_fact_recaller=self._fact,
+                    embed_query_fn=self._embed_query,
+                    reranker=self._reranker,  # type: ignore[arg-type]
+                    llm=self._llm,  # type: ignore[arg-type]
+                    top_k=top_k,
+                )
+            logger.warning("agentic_degraded_no_query_embedding")
+            return await self._fused_episodes(req, where, top_k, vector=[])
 
         fusion_mode, _ = resolve_pipeline(req.method, "episode")
-        enable_rerank = _effective_llm_rerank(req)
-        top_k = self._top_k(req.top_k)
 
         # ── KEYWORD / VECTOR: single-route recall ──
         if fusion_mode is None:
@@ -219,9 +249,31 @@ class SearchManager:
                 if ep is not None
             ]
 
-        # ── HYBRID: parallel sparse + dense recall ──
+        return await self._fused_episodes(req, where, top_k)
+
+    async def _fused_episodes(
+        self,
+        req: SearchRequest,
+        where: str,
+        top_k: int,
+        *,
+        vector: list[float] | None = None,
+    ) -> list[SearchEpisodeItem]:
+        """Sparse + dense recall, then fusion (the HYBRID body).
+
+        ``vector`` is an already-resolved query embedding: ``None`` means
+        "resolve it now", ``[]`` means "the vector leg is unavailable" (the
+        caller already tried and degraded).
+        """
+        # AGENTIC reaches this body only as its own degradation target,
+        # where it runs the HYBRID hierarchy.
+        method = (
+            SearchMethod.HYBRID if req.method == SearchMethod.AGENTIC else req.method
+        )
+        fusion_mode, _ = resolve_pipeline(method, "episode")
+        enable_rerank = _effective_llm_rerank(req)
         sparse, dense, query_vector = await self._recall_sparse_dense(
-            self._ep, req, where, top_k
+            self._ep, req, where, top_k, vector=vector
         )
 
         if fusion_mode == "hierarchy":
@@ -305,16 +357,23 @@ class SearchManager:
         top_k: int,
         *,
         cap: int = _DEFAULT_TOP_K_CAP,
+        vector: list[float] | None = None,
     ) -> tuple[list[Candidate], list[Candidate], list[float]]:
         """Fan out keyword + vector recall in parallel.
 
         The third return is the query embedding itself — the HYBRID
         pipeline passes it into ``facts_for_episodes`` so per-fact
         cosine scoring reuses the same vector instead of re-embedding
-        the query. Returns
-        ``[]`` for ``vector`` when no embedding provider is configured.
+        the query.
+
+        ``vector`` is an already-resolved query embedding when the caller
+        has one: ``None`` resolves it here, ``[]`` means the vector leg is
+        known to be unavailable and only the sparse leg runs. Either way the
+        return value is ``[]`` when there is no usable vector, so callers can
+        branch on it.
         """
-        vector = await self._embed_query(req.query)
+        if vector is None:
+            vector = await self._embed_query(req.query)
         limit = self._recall_limit(req.top_k, cap=cap)
         sparse, dense = await asyncio.gather(
             recaller.sparse_recall(req.query, where, limit=limit),
@@ -335,10 +394,18 @@ class SearchManager:
         episodes whose single mean-pooled vector dilutes a specific topic
         recover via the matching atomic fact's own embedding. Mirrors
         Corti/EverAlgo's MaxSim retrieval pattern.
+
+        This is the body of ``method="vector"``. When the query cannot be
+        embedded there is no vector leg at all, so the method degrades to
+        keyword recall: BM25 answers the same corpus in milliseconds, and an
+        empty page would be a worse answer than a lexical one.
         """
         vector = await self._embed_query(req.query)
         if not vector:
-            return []
+            logger.warning("vector_search_degraded_to_keyword")
+            return await self._ep.sparse_recall(
+                req.query, where, limit=self._recall_limit(req.top_k)
+            )
         fact_limit = min(top_k * _MAXSIM_FACT_MULTIPLIER, _MAXSIM_FACT_POOL_CAP)
         fact_cands = await self._fact.dense_recall(vector, where, limit=fact_limit)
         # Max-pool fact scores by parent episode entry_id.
@@ -366,9 +433,39 @@ class SearchManager:
         return self._apply_radius(rescored, _effective_radius(req))
 
     async def _embed_query(self, query: str) -> list[float]:
+        """Best-effort query embedding — never raises.
+
+        Recall has three independent legs (keyword/BM25, vector, rerank) and
+        the keyword leg needs no provider at all, so an embedder outage is a
+        *degradation*, not a failure. Returning ``[]`` lets every caller fall
+        through to the sparse route.
+
+        The previous behaviour — letting :class:`EmbeddingServiceError`
+        propagate — turned one dead provider into a 503 for *every* search,
+        including the queries BM25 could have answered in milliseconds.
+
+        Returns:
+            The query vector, or ``[]`` when no provider is configured, the
+            provider is inside its cooldown window, or the call failed.
+        """
         if self._embedding is None:
+            _warn_missing_embedding_once()
             return []
-        return await self._embedding.embed(query)
+        if _search_embed_guard.is_open():
+            logger.debug("search_embedding_guard_open_skipping_embed")
+            return []
+        try:
+            vector = await self._embedding.embed(query)
+        except EmbeddingServiceError as exc:
+            _search_embed_guard.record_failure()
+            logger.warning(
+                "search_embedding_unavailable_degrading_to_keyword",
+                cooldown_seconds=_search_embed_guard.cooldown_seconds,
+                error=str(exc),
+            )
+            return []
+        _search_embed_guard.record_success()
+        return vector
 
     # ── Limits / filters ────────────────────────────────────────────
 
@@ -401,12 +498,19 @@ class SearchManager:
     # ── Component guards ────────────────────────────────────────────
 
     def _validate_components(self, req: SearchRequest) -> None:
-        """Fail fast when the chosen method needs components that are missing."""
+        """Reject requests whose method cannot possibly run.
+
+        Only *configuration* gaps are fatal, and only for the method that
+        exists for that one component. A provider that is merely **down**
+        never reaches this guard: the read path degrades to keyword recall
+        (see :meth:`_embed_query`), because a paid-provider outage must not
+        take down search that BM25 can answer. ``HYBRID`` and ``AGENTIC``
+        are multi-leg methods and degrade for a missing embedder too.
+        """
         method = req.method
-        needs_embedding = method != SearchMethod.KEYWORD
-        if needs_embedding and self._embedding is None:
+        if method == SearchMethod.VECTOR and self._embedding is None:
             raise RuntimeError(
-                f"method={method.value!r} requires an embedding provider; "
+                "method='vector' requires an embedding provider; "
                 "configure [embedding] in settings"
             )
         # LLM is only mandatory when the caller explicitly opts into
