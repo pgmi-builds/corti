@@ -12,8 +12,8 @@ IMAGE="m1research/corti"
 # Tag selector (first positional argument).
 #   curl ... | bash              → latest      (all-in-one, embedded PG)
 #   curl ... | bash -s slim      → slim        (external PG required)
-#   curl ... | bash -s v0.2      → v0.2        (pinned version, full)
-#   curl ... | bash -s v0.2-slim → v0.2-slim   (pinned version, slim)
+#   curl ... | bash -s v0.3.4    → v0.3.4      (pinned version, full)
+#   curl ... | bash -s v0.3.4-slim → v0.3.4-slim (pinned version, slim)
 TAG="${1:-latest}"
 IMAGE_FULL="${IMAGE}:${TAG}"
 

@@ -139,7 +139,7 @@ curl -fsSL https://raw.githubusercontent.com/pgmi-builds/corti/main/install.sh |
 > export DB_HOST=... DB_PORT=5432 DB_NAME=corti DB_USER=corti DB_PASSWORD=...
 > curl -fsSL https://raw.githubusercontent.com/pgmi-builds/corti/main/install.sh | bash -s slim
 > ```
-> Slim image: ~400 MB vs 1.2 GB all-in-one. Pinned version: `bash -s v0.2-slim`.
+> Slim image: ~400 MB vs 1.2 GB all-in-one. Pinned version: `bash -s v0.3.4-slim`.
 
 ### 2. Start the Server
 
@@ -218,7 +218,7 @@ dsh plugin --profile web add https://github.com/pgmi-builds/corti#src/integratio
 #   echo "CORTI_BASE_URL=http://<corti-host>:5473" >> ~/.dsh/.env
 ```
 
-Pin to a specific version by replacing `main` with a tag (e.g. `v0.2`).
+Pin to a specific version by replacing `main` with a tag (e.g. `v0.3.4`).
 
 ---
 
