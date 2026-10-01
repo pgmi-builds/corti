@@ -259,6 +259,19 @@ function normalizeSample(v, fallback) {
     const n = Math.floor(Number(v));
     return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
+/**
+ * Tell the model when recall was partial.
+ *
+ * "(no memories found)" rendered identically whether the store was empty or
+ * the semantic leg was down and the answer came from the lexical leg alone.
+ * A model cannot act on a distinction it never sees, so the server's
+ * `degraded[]` is surfaced next to the results it qualifies.
+ */
+function degradationNote(degraded) {
+    if (!degraded || degraded.length === 0)
+        return "";
+    return `\n[recall degraded: ${degraded.join(", ")} unavailable — these results are partial, not the full ranking]`;
+}
 /** Tool-result render: full episode text for memory_search / memory_list. */
 function renderFullEpisodes(eps, maxChars) {
     const lines = [];
@@ -475,7 +488,11 @@ export async function apply(ctx, config) {
             if (!res.ok)
                 return { content: describeFailure("Corti search", res.status, res.error) };
             const body = renderFullEpisodes(res.data?.episodes ?? [], 6000);
-            return { content: body || "(no memories found)" };
+            const note = degradationNote(res.data?.degraded);
+            if (!body) {
+                return { content: `(no memories found)${note}` };
+            }
+            return { content: body + note };
         },
     }));
     ctx.tools.register(plainTool({
