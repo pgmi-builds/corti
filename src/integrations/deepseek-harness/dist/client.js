@@ -67,11 +67,11 @@ export class CortiClient {
             ...this.scope(),
         });
     }
-    /** POST /api/v1/memory/get — recent memories, newest first */
-    async recent(pageSize = 10) {
+    /** POST /api/v1/memory/get — recent memories, newest first (`page` is 1-based). */
+    async recent(pageSize = 10, page = 1) {
         return this.post("/api/v1/memory/get", {
             memory_type: "episode",
-            page: 1,
+            page,
             page_size: pageSize,
             sort_by: "timestamp",
             sort_order: "desc",

@@ -48,8 +48,8 @@ export declare class CortiClient {
     }): Promise<Envelope<{
         episodes: Episode[];
     }>>;
-    /** POST /api/v1/memory/get — recent memories, newest first */
-    recent(pageSize?: number): Promise<Envelope<{
+    /** POST /api/v1/memory/get — recent memories, newest first (`page` is 1-based). */
+    recent(pageSize?: number, page?: number): Promise<Envelope<{
         memories?: Episode[];
         episodes?: Episode[];
         items?: Episode[];

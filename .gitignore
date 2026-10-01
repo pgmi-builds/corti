@@ -16,6 +16,9 @@ develop-eggs/
 dist/
 node_modules/
 !src/integrations/deepseek-harness/dist/
+# dsh plugin package tarball — a build artifact (regenerate with `pnpm pack` /
+# `npm pack`); local profile installs reference it by absolute path.
+src/integrations/deepseek-harness/corti-memory-*.tgz
 downloads/
 eggs/
 .eggs/

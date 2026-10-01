@@ -1,0 +1,82 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Corti memory for DeepSeek Harness — connection + identity
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Copy this file to `$DSH_HOME/corti.yaml` (usually `~/.dsh/corti.yaml`) and
+# replace the five values below. `$DSH_HOME` is this dsh installation's data
+# directory, so two harnesses on one machine keep separate configs — and
+# separate memories — without any other setting.
+#
+# Fallbacks: `corti.yml` is read if `corti.yaml` is absent, and the legacy
+# `corti.json` (same keys, JSON syntax) if neither YAML file exists.
+#
+# ── How the four ids decide who shares memory with whom ─────────────────────
+#
+# One deployment is a single store room. It holds one memory root on disk
+# (`~/.corti/`) and one PostgreSQL database; there is no database-per-app.
+# `app_id` and `project_id` are two nested partition keys *inside* that single
+# store, and every read and write pins both. Two agents share memories exactly
+# when their (app_id, project_id, user_id) match:
+#
+#   app_id      the product / tenant. Same value => same store room.
+#   project_id  a workspace inside the app. Same value => same shelves.
+#   user_id     whose memory log this is — the feed the swarm reads.
+#   agent_id    WHO is speaking. This is the part that turns a shared log
+#               into a swarm.
+#
+# Set a level to the same value to share it, to a different value to keep it
+# apart; everything is configuration, nothing is hard-coded. Isolation is
+# strict in both directions: a different `app_id` or `project_id` is invisible
+# to the other side in search as well as in the file tree. To keep several
+# independent branches of work in one deployment, give each its own
+# `project_id`.
+#
+# ── What this design does that anonymous shared memory cannot ───────────────
+#
+# Most memory plugins do share — but anonymously. They pool one curator
+# identity, so agents can exchange skills and "we already tried that"
+# experience, yet nothing records who did what, and the shared pool is
+# marketed as the feature. Here `agent_id` is stamped on every captured turn,
+# so what lands in the shared log is *attributed* memory:
+#
+#   - every agent writes into the same `user_id` episode log, tagged with its
+#     own `agent_id`;
+#   - recall renders that tag, so an agent reading its startup catalogue sees
+#     which agent ran which task, not merely that the task happened;
+#   - the result is less a shared wiki than a workshop floor: each agent knows
+#     its own work and overhears everyone else's.
+#
+# That is the swarm / social-society setup, and it needs no server feature —
+# only the four ids below. For a single agent, point `agent_id` at itself and
+# use the same file; nothing else changes. Keep `agent_id` unique per agent:
+# it is also the owner key for agent-scoped memory (cases, skills) when the
+# server runs in agent mode.
+#
+# ── Precedence ──────────────────────────────────────────────────────────────
+#
+#   environment variable > this file > plugin config > built-in default
+#
+# Environment variables: CORTI_BASE_URL, CORTI_APP_ID, CORTI_PROJECT_ID,
+# CORTI_USER_ID, CORTI_AGENT_ID. Both spellings are accepted for every key
+# (`api_url` or `baseUrl`, ...). An empty string is ignored, so a blank value
+# can never clear a default. A malformed file is reported on stderr and
+# skipped — it never stops the plugin from loading.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Base URL of the Corti server, without a trailing slash.
+api_url: https://corti.example.com
+
+# The shared space. Every agent that should remember together uses these
+# three values verbatim and differs only in `agent_id` below.
+#
+#   Individual use: any values you like — they only have to stay constant.
+#   Swarm use:      one app_id per team, one project_id per line of work,
+#                   one shared user_id for the feed.
+app_id: <app-id>
+project_id: <project-id>
+user_id: <shared-user-id>
+
+# This agent's name inside the space. It is the speaker tag on everything the
+# agent contributes and the key its own agent-scoped memory is stored under.
+# Must be unique within (app_id, project_id, user_id).
+agent_id: <this-agent-id>

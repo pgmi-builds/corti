@@ -97,11 +97,14 @@ export class CortiClient {
     });
   }
 
-  /** POST /api/v1/memory/get — recent memories, newest first */
-  async recent(pageSize = 10): Promise<Envelope<{ memories?: Episode[]; episodes?: Episode[]; items?: Episode[] }>> {
+/** POST /api/v1/memory/get — recent memories, newest first (`page` is 1-based). */
+async recent(
+    pageSize = 10,
+    page = 1,
+  ): Promise<Envelope<{ memories?: Episode[]; episodes?: Episode[]; items?: Episode[] }>> {
     return this.post("/api/v1/memory/get", {
       memory_type: "episode",
-      page: 1,
+      page,
       page_size: pageSize,
       sort_by: "timestamp",
       sort_order: "desc",
