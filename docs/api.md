@@ -571,6 +571,21 @@ carve the same message into two cells. Two caveats:
 - `/add` still has no idempotency *key*; the dedup is derived from the
   payload itself.
 
+**An ack is not a per-call episode.** `status: "accepted"` means the raw
+content is durably buffered, nothing more. How that buffer is carved into
+episodes is decided downstream by boundary detection, which reads the
+conversation, not the calls: three `/add` calls inside one short window can
+produce one episode (and two `/add` calls a second apart usually merge into
+one), while a call whose content never reaches a boundary may not produce an
+episode of its own at all. Measured on 2026-10-02: adds A+B+C in a 9-second
+window produced one episode; adds D+E a second apart merged into one; every
+one of them was nonetheless extracted into markdown and the index.
+
+So a client must not treat "one ack per call" as "one memory per call", and
+must not use the ack as proof that a later `/search` will return that
+content — see [Eventual consistency](#eventual-consistency). To recall what
+was written, search for it.
+
 #### cURL example
 
 ```bash

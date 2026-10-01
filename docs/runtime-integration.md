@@ -67,7 +67,13 @@ adapter may show or drop.
 6. **Derive a stable session id** from the host's own session key, and pass
    the same value to `session/end`. A digest stored under an id nobody can
    reproduce is a digest nobody will ever read.
-7. **Keep provider errors off the model's channel.** "DashScope is in
+7. **Do not read an `add` ack as one memory per call.** `status:
+   "accepted"` means the raw turn is durably buffered. Episode boundaries are
+   decided downstream by boundary detection, which reads the conversation:
+   several calls in one window can become one episode, and one call can
+   become none of its own. Report success as "accepted", not as "stored as a
+   memory".
+8. **Keep provider errors off the model's channel.** "DashScope is in
    arrears" is an operator message; surface it through the host's log or a
    warning channel, not as injected context.
 

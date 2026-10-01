@@ -78,10 +78,14 @@ _DAILY_LOG_COMMON = """\
     deprecated_by   text,
     -- NULL means "embedding not computed yet": the embedder was
     -- unreachable when the row was written. The row is still written so the
-    -- memory stays keyword/BM25 searchable, and the cascade backfills the
-    -- vector once the embedder recovers. pgvector skips NULL rows in HNSW
-    -- and in ``<=>`` comparisons, so an unbackfilled row is simply invisible
-    -- to vector recall rather than poisoning the ordering.
+    -- memory stays keyword/BM25 searchable.
+    --
+    -- Nothing scans for NULL vectors on a schedule -- embedding happens when
+    -- a memory arrives, and re-checking every new write for a global backlog
+    -- is not worth the provider spend. A vectorless row is therefore skipped
+    -- by every dense query (they all carry ``vector IS NOT NULL``) rather
+    -- than scoring NULL and breaking the read. To clear a backlog, use
+    -- ``src/scripts/backfill_vectors.py``.
     vector          vector({dim})"""
 
 _DAILY_LOG_INDEXES = """\

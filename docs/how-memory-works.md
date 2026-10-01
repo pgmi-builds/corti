@@ -289,13 +289,20 @@ recall instead of failing the request**.
 | Leg that is down | What happens |
 |---|---|
 | embedding (query) | `hybrid` runs the sparse leg alone; `vector` falls back to lexical recall; `agentic` degrades to the hybrid hierarchy. Logged once, then a 300 s cooldown stops re-paying the provider timeout on every query. |
-| embedding (ingest) | rows are written with `vector = NULL` — the memory is stored, markdown-indexed and BM25-searchable — and the next cascade pass backfills the vector. |
+| embedding (ingest) | rows are written with `vector = NULL` — the memory is stored, markdown-indexed and BM25-searchable. Every dense query carries `vector IS NOT NULL`, so a vectorless row is skipped rather than scored, and a NULL never fails the read. |
 | rerank | the pre-rerank order is kept. The candidates already carry BM25 / cosine / RRF scores, so the answer is ranked worse, not missing. |
 
 A *missing* provider is different from an unavailable one: `method="vector"`
 with no `[embedding]` configured is still a configuration error, because that
 method is meaningless without it. `hybrid` and `agentic` are multi-leg and
 degrade in that case too.
+
+Vectorless rows are **not** backfilled on a schedule. Embedding is triggered
+by a memory arriving, and re-scanning the corpus on every write to hunt for a
+backlog would spend provider calls without producing a new memory. A row
+catches up for free when its own file is reprocessed for another reason; for
+a genuine backlog, run `src/scripts/backfill_vectors.py`.
+
 
 Search results are therefore never a 503 for a provider outage. The relevant
 log lines are `search_embedding_unavailable_degrading_to_keyword`,
