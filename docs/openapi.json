@@ -2444,6 +2444,13 @@
             },
             "type": "array",
             "title": "Unprocessed Messages"
+          },
+          "degraded": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Degraded"
           }
         },
         "additionalProperties": false,
@@ -2789,13 +2796,6 @@
           },
           "data": {
             "$ref": "#/components/schemas/SearchData"
-          },
-          "degraded": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Degraded"
           }
         },
         "additionalProperties": false,

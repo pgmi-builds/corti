@@ -180,11 +180,10 @@ class SearchManager:
             episodes=episodes,
             profiles=profiles,
             unprocessed_messages=unprocessed,
+            degraded=degraded_legs(),
         )
 
-        return SearchResponse(
-            request_id=request_id, data=data, degraded=degraded_legs()
-        )
+        return SearchResponse(request_id=request_id, data=data)
 
     # ── Unprocessed buffer ──────────────────────────────────────────
 

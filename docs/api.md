@@ -1190,12 +1190,19 @@ duplicate.
 
 #### Degradation reporting
 
-`/search` and `/prefetch` both carry `degraded: string[]`. It is empty on a
-healthy provider; `["embedding"]` means recall ran on the keyword leg
-alone and `["rerank"]` means the first-stage order was kept. When a leg is
-missing, `prefetch` also prepends a one-line notice to `block` so the model
-knows the ranking it received is partial. The request still succeeds —
-degradation is reported, never fatal.
+`/search`, `/prefetch` and `/session/start` all report `degraded:
+string[]` **inside `data`**, beside the results it qualifies. It is empty on
+a healthy provider; `["embedding"]` means recall ran on the keyword leg
+alone and `["rerank"]` means the first-stage order was kept.
+
+When a leg is missing, `prefetch` also prepends a one-line notice to `block`
+so the model knows the ranking it received is partial. The request still
+succeeds — degradation is reported, never fatal.
+
+Do not drop this field on the floor. "Nothing relevant was found" and "the
+semantic leg is down, so this was a lexical answer" are different facts, and
+a client that renders them identically leaves the model unable to tell an
+empty store from an impaired one.
 
 
 ### POST /api/v1/ome/trigger

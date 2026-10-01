@@ -223,6 +223,16 @@ class SearchData(BaseModel):
     """In-flight messages still in the boundary-detection buffer for
     the ``filters.session_id`` (if supplied as a top-level eq scalar);
     otherwise stays empty."""
+    degraded: list[str] = Field(default_factory=list)
+    """Retrieval legs that were unavailable and got substituted.
+
+    Empty on a healthy provider. ``["embedding"]`` means recall ran on the
+    keyword leg alone; ``["rerank"]`` means the first-stage order was kept.
+    The request still succeeded — degradation is reported so a caller never
+    presents a keyword-only answer as if it were semantic. Lives on the
+    payload, like every other memory response, so a client reads it from the
+    same place regardless of endpoint.
+    """
 
 
 class SearchResponse(BaseModel):
@@ -232,11 +242,3 @@ class SearchResponse(BaseModel):
 
     request_id: str
     data: SearchData
-    degraded: list[str] = Field(default_factory=list)
-    """Retrieval legs that were unavailable and got substituted.
-
-    Empty on a healthy provider. ``["embedding"]`` means recall ran on the
-    keyword leg alone; ``["rerank"]`` means the first-stage order was kept.
-    The request still succeeded — degradation is reported so callers never
-    present a keyword-only answer as if it were semantic.
-    """

@@ -78,7 +78,7 @@ async def prefetch(req: PrefetchRequest) -> PrefetchData:
         )
     )
     data = response.data
-    degraded = list(response.degraded)
+    degraded = list(data.degraded)
     scored = [_search_hit(ep) for ep in data.episodes]
     hits = [h for h in scored if h.score >= req.min_score][: req.top_k]
 

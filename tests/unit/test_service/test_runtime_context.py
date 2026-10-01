@@ -70,8 +70,10 @@ def _search_response(
 ) -> SearchResponse:
     return SearchResponse(
         request_id="req_search",
-        data=SearchData(episodes=episodes),
-        degraded=degraded if degraded is not None else [],
+        data=SearchData(
+            episodes=episodes,
+            degraded=degraded if degraded is not None else [],
+        ),
     )
 
 
