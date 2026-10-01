@@ -45,6 +45,7 @@ from everalgo.types import Candidate, RankInput
 
 from .adapter import resolve_pipeline
 from .agentic import search_episodes_agentic
+from .degradation import degraded_legs, mark_degraded, reset_degradation
 from .dto import (
     FilterNode,
     SearchData,
@@ -96,6 +97,7 @@ def _warn_missing_embedding_once() -> None:
         return
     _warned_missing_embedding = True
     logger.warning("search_embedding_not_configured_degrading_to_keyword")
+    mark_degraded("embedding")
 
 
 # Recall pool sizing — matches the legacy enterprise constants
@@ -156,6 +158,7 @@ class SearchManager:
 
     async def search(self, req: SearchRequest) -> SearchResponse:
         request_id = gen_request_id()
+        reset_degradation()
         # Compile filters first: a malformed `filters` payload is a user
         # input error (422) and should surface before the server-side
         # component guard (500). The two steps are independent.
@@ -179,7 +182,9 @@ class SearchManager:
             unprocessed_messages=unprocessed,
         )
 
-        return SearchResponse(request_id=request_id, data=data)
+        return SearchResponse(
+            request_id=request_id, data=data, degraded=degraded_legs()
+        )
 
     # ── Unprocessed buffer ──────────────────────────────────────────
 
@@ -231,6 +236,7 @@ class SearchManager:
                     top_k=top_k,
                 )
             logger.warning("agentic_degraded_no_query_embedding")
+            mark_degraded("embedding")
             return await self._fused_episodes(req, where, top_k, vector=[])
 
         fusion_mode, _ = resolve_pipeline(req.method, "episode")
@@ -403,6 +409,7 @@ class SearchManager:
         vector = await self._embed_query(req.query)
         if not vector:
             logger.warning("vector_search_degraded_to_keyword")
+            mark_degraded("embedding")
             return await self._ep.sparse_recall(
                 req.query, where, limit=self._recall_limit(req.top_k)
             )
@@ -453,6 +460,7 @@ class SearchManager:
             return []
         if _search_embed_guard.is_open():
             logger.debug("search_embedding_guard_open_skipping_embed")
+            mark_degraded("embedding")
             return []
         try:
             vector = await self._embedding.embed(query)
@@ -463,6 +471,7 @@ class SearchManager:
                 cooldown_seconds=_search_embed_guard.cooldown_seconds,
                 error=str(exc),
             )
+            mark_degraded("embedding")
             return []
         _search_embed_guard.record_success()
         return vector

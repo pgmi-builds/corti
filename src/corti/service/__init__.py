@@ -47,6 +47,9 @@ from .knowledge import replace_document as replace_document
 from .knowledge import search_knowledge as search_knowledge
 from .memorize import MemorizeResult as MemorizeResult
 from .memorize import memorize as memorize
+from .runtime_context import prefetch as prefetch
+from .runtime_context import session_end as session_end
+from .runtime_context import session_start as session_start
 from .search import search as search
 
 __all__ = [
@@ -77,7 +80,10 @@ __all__ = [
     "list_documents",
     "memorize",
     "patch_document",
+    "prefetch",
     "replace_document",
     "search",
     "search_knowledge",
+    "session_end",
+    "session_start",
 ]

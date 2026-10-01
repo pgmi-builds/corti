@@ -30,6 +30,8 @@ from everalgo.rank.fusion import rrf
 from everalgo.rank.protocols import RerankFn, RetrieveFn
 from everalgo.types import Candidate
 
+from .degradation import mark_degraded
+
 if TYPE_CHECKING:
     from .recall import KindRecaller
 
@@ -52,6 +54,7 @@ def _keep_first_stage_order(items: list[Candidate], exc: Exception) -> list[Cand
         candidates=len(items),
         error=str(exc),
     )
+    mark_degraded("rerank")
     return items
 
 

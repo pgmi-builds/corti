@@ -37,13 +37,16 @@ from .repos import QueueSummary as QueueSummary
 from .repos import TopicUpsertPayload as TopicUpsertPayload
 from .repos import cluster_repo as cluster_repo
 from .repos import conversation_status_repo as conversation_status_repo
+from .repos import get_latest_session_summary as get_latest_session_summary
 from .repos import knowledge_document_repo as knowledge_document_repo
 from .repos import knowledge_topic_sqlite_repo as knowledge_topic_sqlite_repo
 from .repos import md_change_state_repo as md_change_state_repo
 from .repos import memcell_repo as memcell_repo
 from .repos import mint_cluster_id as mint_cluster_id
 from .repos import reflection_report_repo as reflection_report_repo
+from .repos import session_summary_repo as session_summary_repo
 from .repos import unprocessed_buffer_repo as unprocessed_buffer_repo
+from .repos import upsert_session_summary as upsert_session_summary
 from .sqlite_manager import dispose_engine as dispose_engine
 from .sqlite_manager import get_engine as get_engine
 from .sqlite_manager import get_session_factory as get_session_factory
@@ -55,6 +58,7 @@ from .tables import KnowledgeTopicRow as KnowledgeTopicRow
 from .tables import MdChangeState as MdChangeState
 from .tables import Memcell as Memcell
 from .tables import ReflectionReport as ReflectionReport
+from .tables import SessionSummary as SessionSummary
 from .tables import UnprocessedBuffer as UnprocessedBuffer
 
 __all__ = [
@@ -69,12 +73,14 @@ __all__ = [
     "Memcell",
     "QueueSummary",
     "ReflectionReport",
+    "SessionSummary",
     "TopicUpsertPayload",
     "UnprocessedBuffer",
     "cluster_repo",
     "conversation_status_repo",
     "dispose_engine",
     "get_engine",
+    "get_latest_session_summary",
     "get_session_factory",
     "knowledge_document_repo",
     "knowledge_topic_sqlite_repo",
@@ -82,5 +88,7 @@ __all__ = [
     "memcell_repo",
     "mint_cluster_id",
     "reflection_report_repo",
+    "session_summary_repo",
     "unprocessed_buffer_repo",
+    "upsert_session_summary",
 ]

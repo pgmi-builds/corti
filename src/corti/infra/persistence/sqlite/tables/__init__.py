@@ -15,6 +15,7 @@ from .knowledge import KnowledgeTopicRow as KnowledgeTopicRow
 from .md_change_state import MdChangeState as MdChangeState
 from .memcell import Memcell as Memcell
 from .reflection_report import ReflectionReport as ReflectionReport
+from .session_summary import SessionSummary as SessionSummary
 from .unprocessed_buffer import UnprocessedBuffer as UnprocessedBuffer
 
 __all__ = [
@@ -26,5 +27,6 @@ __all__ = [
     "MdChangeState",
     "Memcell",
     "ReflectionReport",
+    "SessionSummary",
     "UnprocessedBuffer",
 ]

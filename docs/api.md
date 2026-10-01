@@ -30,6 +30,11 @@ business semantics the raw spec does not carry.
   - [POST /api/v1/memory/flush](#post-apiv1memoryflush)
   - [POST /api/v1/memory/search](#post-apiv1memorysearch)
   - [POST /api/v1/memory/get](#post-apiv1memoryget)
+  - [Runtime interop endpoints](#runtime-interop-endpoints)
+    - [POST /api/v1/memory/session/start](#post-apiv1memorysessionstart)
+    - [POST /api/v1/memory/prefetch](#post-apiv1memoryprefetch)
+    - [POST /api/v1/memory/session/end](#post-apiv1memorysessionend)
+    - [Degradation reporting](#degradation-reporting)
   - [POST /api/v1/ome/trigger](#post-apiv1ometrigger)
   - [Knowledge endpoints](#knowledge-endpoints)
 - [OpenAPI spec source](#openapi-spec-source)
@@ -1096,6 +1101,100 @@ Response (real capture):
     }
 }
 ```
+### Runtime interop endpoints
+
+These three endpoints exist for **agent-runtime plugins**, not for tool
+callers. Each returns *finished text* — the exact string a runtime injects
+into its model's context — so recall thresholds, block formats, recency
+sampling and degradation reporting live in one place instead of being
+re-implemented, and drifting, inside every plugin.
+
+An adapter's whole job is to move these strings between its host's hook
+protocol and the wire. Rationale and migration history:
+[adr/0004-runtime-interop-endpoints.md](adr/0004-runtime-interop-endpoints.md).
+
+All three share the request scope `user_id` (required), `app_id`,
+`project_id`, `agent_id`, `session_id`.
+
+#### POST /api/v1/memory/session/start
+
+Once per session. Returns breadth — owner profile, the previous session's
+summary, and a catalog of recent episodes — as one injectable block.
+
+The catalog is **sampled**: by default 10 entries are drawn at random from
+the 200 most recent memory records, so one long session cannot occupy every
+slot. The block says so out loud, because a random fragment must not be
+mistaken for a summary of a finished task. Set `recency_sample: 0` for a
+plain newest-first list of `recent_count` entries instead.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `recency_window` | `int` | 200 | Newest records the sample is drawn from |
+| `recency_sample` | `int` | 10 | Catalog size; `0` switches to newest-first |
+| `recent_count` | `int` | 5 | Used only when `recency_sample` is `0` |
+| `max_chars` | `int` | 4000 | Ceiling for the whole block |
+| `include_profile` | `bool` | `true` | Include the owner-profile line |
+
+Response: `block` (inject verbatim), `display` (one human line), `catalog`,
+`total_episodes`, `last_session`, `profile_line`.
+
+#### POST /api/v1/memory/prefetch
+
+Once per user turn. Returns the recall block for one prompt.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `query` | `string` | — | Required |
+| `method` | `SearchMethod` | `hybrid` | Same values as `/search` |
+| `top_k` | `int` | 5 | Hits injected |
+| `min_score` | `float` | `0.0` | Floor on the injected hits; `0.0` disables it |
+| `max_chars` | `int` | 3500 | Ceiling for the block |
+| `include_profile` | `bool` | `true` | Prepend the owner-profile line |
+
+`skipped` is the interesting field. It is `"trivial_prompt"` when the
+prompt carries no retrievable intent (`"ok"`, `"thanks"`, a host slash
+command, anything under four characters) and `"no_relevant_hits"` when
+recall came back empty. **Neither is an error**: the adapter injects
+nothing and lets the turn proceed. Only a `null` `skipped` comes with a
+non-empty `block`.
+
+On a healthy provider `min_score: 0.0` is right. Recall scores are not
+comparable across methods — the same episode measured 0.0079 fused on the
+HYBRID path and 0.2078 on the lexical path — so a single shared floor
+drops every hybrid hit and looks exactly like an empty memory. Prune with
+`top_k`; set a floor only when you know your method's scale.
+
+#### POST /api/v1/memory/session/end
+
+Once per finished session. Records the digest that a later
+`session/start` reports as "Last session".
+
+The adapter parses its own transcript — transcript shapes are
+host-specific — and sends the result. Where the digest is *stored* is
+server state, which is why the summary is visible to every runtime rather
+than only to the one that wrote it.
+
+| Field | Type | Notes |
+|---|---|---|
+| `session_id` | `string` | Required |
+| `first_prompt` | `string` | Drives the one-line summary |
+| `turn_count` | `int` | Reported in the display line |
+| `started_at` / `ended_at` | `datetime` | ISO-8601 or epoch; drives the duration |
+| `reason` | `string` | e.g. `logout`, `clear` |
+
+The write is idempotent on `(app_id, project_id, user_id, session_id)`: a
+repeated `session/end` refreshes the existing row instead of appending a
+duplicate.
+
+#### Degradation reporting
+
+`/search` and `/prefetch` both carry `degraded: string[]`. It is empty on a
+healthy provider; `["embedding"]` means recall ran on the keyword leg
+alone and `["rerank"]` means the first-stage order was kept. When a leg is
+missing, `prefetch` also prepends a one-line notice to `block` so the model
+knows the ranking it received is partial. The request still succeeds —
+degradation is reported, never fatal.
+
 
 ### POST /api/v1/ome/trigger
 

@@ -178,6 +178,132 @@
         }
       }
     },
+    "/api/v1/memory/prefetch": {
+      "post": {
+        "tags": [
+          "runtime"
+        ],
+        "summary": "Post Prefetch",
+        "description": "Per-turn recall, rendered as a ready-to-inject block.\n\n``skipped`` is a normal outcome (\"nothing worth recalling\"), not an\nerror — the adapter injects nothing and moves on.",
+        "operationId": "post_prefetch_api_v1_memory_prefetch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrefetchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrefetchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/memory/session/start": {
+      "post": {
+        "tags": [
+          "runtime"
+        ],
+        "summary": "Post Session Start",
+        "description": "Once-per-session breadth: profile, last session, random recent catalog.",
+        "operationId": "post_session_start_api_v1_memory_session_start_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionStartResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/memory/session/end": {
+      "post": {
+        "tags": [
+          "runtime"
+        ],
+        "summary": "Post Session End",
+        "description": "Record a finished session so ``session/start`` can report it later.\n\nReplaces the per-plugin session files (Claude Code kept its own\n``sessions.jsonl`` that no other runtime could see).",
+        "operationId": "post_session_end_api_v1_memory_session_end_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionEndRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionEndResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/memory/get": {
       "post": {
         "tags": [
@@ -2099,6 +2225,186 @@
         ],
         "title": "MessageItemDTO"
       },
+      "PrefetchRequest": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "User Id"
+          },
+          "app_id": {
+            "type": "string",
+            "title": "App Id",
+            "default": "default"
+          },
+          "project_id": {
+            "type": "string",
+            "title": "Project Id",
+            "default": "default"
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Query"
+          },
+          "method": {
+            "$ref": "#/components/schemas/SearchMethod",
+            "default": "hybrid"
+          },
+          "top_k": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Top K",
+            "default": 5
+          },
+          "min_score": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Min Score",
+            "default": 0.1
+          },
+          "max_chars": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Max Chars",
+            "default": 3500
+          },
+          "include_profile": {
+            "type": "boolean",
+            "title": "Include Profile",
+            "default": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "user_id",
+          "query"
+        ],
+        "title": "PrefetchRequest",
+        "description": "Per-turn recall: \"is anything from before relevant to this prompt?\"."
+      },
+      "PrefetchResponse": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "skipped": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "trivial_prompt",
+                  "no_relevant_hits"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skipped"
+          },
+          "block": {
+            "type": "string",
+            "title": "Block",
+            "default": ""
+          },
+          "display": {
+            "type": "string",
+            "title": "Display",
+            "default": ""
+          },
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeHit"
+            },
+            "type": "array",
+            "title": "Hits"
+          },
+          "degraded": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Degraded"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "request_id"
+        ],
+        "title": "PrefetchResponse",
+        "description": "``block`` is injected verbatim; ``display`` is the human one-liner."
+      },
+      "RuntimeHit": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "subject": {
+            "type": "string",
+            "title": "Subject"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Timestamp"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score"
+          },
+          "sender_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sender Ids"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "subject",
+          "summary",
+          "timestamp",
+          "score"
+        ],
+        "title": "RuntimeHit",
+        "description": "One episode hit shaping an injected block."
+      },
       "SearchAtomicFactItem": {
         "properties": {
           "id": {
@@ -2491,6 +2797,13 @@
           },
           "data": {
             "$ref": "#/components/schemas/SearchData"
+          },
+          "degraded": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Degraded"
           }
         },
         "additionalProperties": false,
@@ -2501,6 +2814,371 @@
         ],
         "title": "SearchResponse",
         "description": "Top-level response envelope."
+      },
+      "SessionEndRequest": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "User Id"
+          },
+          "app_id": {
+            "type": "string",
+            "title": "App Id",
+            "default": "default"
+          },
+          "project_id": {
+            "type": "string",
+            "title": "Project Id",
+            "default": "default"
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "session_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Session Id"
+          },
+          "first_prompt": {
+            "type": "string",
+            "title": "First Prompt",
+            "default": ""
+          },
+          "turn_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Turn Count",
+            "default": 0
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "user_id",
+          "session_id"
+        ],
+        "title": "SessionEndRequest",
+        "description": "The adapter parses its own transcript; the server keeps the record.\n\nTranscript shapes are host-specific (Claude Code's JSONL, DSH's turn\nevents), so extraction stays in the adapter. What the adapter must *not*\ndo is decide where the summary lives — that is server state, visible to\nevery runtime and to ``session/start``."
+      },
+      "SessionEndResponse": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "stored": {
+            "type": "boolean",
+            "title": "Stored"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/SessionSummaryItem"
+          },
+          "display": {
+            "type": "string",
+            "title": "Display"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "request_id",
+          "stored",
+          "summary",
+          "display"
+        ],
+        "title": "SessionEndResponse"
+      },
+      "SessionStartRequest": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "User Id"
+          },
+          "app_id": {
+            "type": "string",
+            "title": "App Id",
+            "default": "default"
+          },
+          "project_id": {
+            "type": "string",
+            "title": "Project Id",
+            "default": "default"
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "recency_window": {
+            "type": "integer",
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Recency Window",
+            "default": 200
+          },
+          "recency_sample": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Recency Sample",
+            "default": 10
+          },
+          "recent_count": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Recent Count",
+            "default": 5
+          },
+          "max_chars": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Max Chars",
+            "default": 4000
+          },
+          "include_profile": {
+            "type": "boolean",
+            "title": "Include Profile",
+            "default": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "user_id"
+        ],
+        "title": "SessionStartRequest",
+        "description": "Once-per-session breadth: profile, last session, recent catalog."
+      },
+      "SessionStartResponse": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "block": {
+            "type": "string",
+            "title": "Block",
+            "default": ""
+          },
+          "display": {
+            "type": "string",
+            "title": "Display",
+            "default": ""
+          },
+          "catalog": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeHit"
+            },
+            "type": "array",
+            "title": "Catalog"
+          },
+          "total_episodes": {
+            "type": "integer",
+            "title": "Total Episodes",
+            "default": 0
+          },
+          "last_session": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionSummaryItem"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "profile_line": {
+            "type": "string",
+            "title": "Profile Line",
+            "default": ""
+          },
+          "degraded": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Degraded"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "request_id"
+        ],
+        "title": "SessionStartResponse"
+      },
+      "SessionSummaryItem": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "user_id": {
+            "type": "string",
+            "title": "User Id"
+          },
+          "app_id": {
+            "type": "string",
+            "title": "App Id",
+            "default": "default"
+          },
+          "project_id": {
+            "type": "string",
+            "title": "Project Id",
+            "default": "default"
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "first_prompt": {
+            "type": "string",
+            "title": "First Prompt",
+            "default": ""
+          },
+          "turn_count": {
+            "type": "integer",
+            "title": "Turn Count",
+            "default": 0
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "recorded_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Recorded At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "session_id",
+          "user_id",
+          "recorded_at"
+        ],
+        "title": "SessionSummaryItem",
+        "description": "Summary of one finished session, as stored server-side.\n\nReplaces the per-plugin ``sessions.jsonl`` files that Claude Code kept\n(and that no other runtime could see)."
       },
       "SuccessEnvelope_AddResponseData_": {
         "properties": {

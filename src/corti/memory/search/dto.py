@@ -232,3 +232,11 @@ class SearchResponse(BaseModel):
 
     request_id: str
     data: SearchData
+    degraded: list[str] = Field(default_factory=list)
+    """Retrieval legs that were unavailable and got substituted.
+
+    Empty on a healthy provider. ``["embedding"]`` means recall ran on the
+    keyword leg alone; ``["rerank"]`` means the first-stage order was kept.
+    The request still succeeded — degradation is reported so callers never
+    present a keyword-only answer as if it were semantic.
+    """

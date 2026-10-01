@@ -42,6 +42,7 @@ from .routes import (
     memorize,
     metrics,
     ome,
+    runtime_context,
     search,
 )
 
@@ -121,6 +122,7 @@ def create_app(
     app.include_router(metrics.router)
     app.include_router(memorize.router)
     app.include_router(search.router)
+    app.include_router(runtime_context.router)
     app.include_router(get.router)
     app.include_router(ome.router)
     app.include_router(knowledge.router)
