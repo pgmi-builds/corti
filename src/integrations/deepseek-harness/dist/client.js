@@ -58,12 +58,30 @@ export class CortiClient {
             clearTimeout(timer);
         }
     }
-    /** POST /api/v1/memory/search */
+    /**
+     * POST /api/v1/memory/search.
+     *
+     * Recalls with the requested method and, when the server reports the vector
+     * leg unavailable (503), retries once as `keyword`. The server degrades
+     * internally too, but an older deployment will not — and a lexical answer
+     * beats no answer for an agent that has nothing else to go on. A request
+     * that already asks for `keyword` is never retried, so this cannot loop.
+     */
     async search(query, opts = {}) {
+        const method = opts.method ?? "hybrid";
+        const topK = opts.topK ?? 8;
+        const first = await this.post("/api/v1/memory/search", {
+            query,
+            method,
+            top_k: topK,
+            ...this.scope(),
+        });
+        if (first.ok || method === "keyword" || first.status !== 503)
+            return first;
         return this.post("/api/v1/memory/search", {
             query,
-            method: opts.method ?? "hybrid",
-            top_k: opts.topK ?? 8,
+            method: "keyword",
+            top_k: topK,
             ...this.scope(),
         });
     }

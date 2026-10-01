@@ -89,16 +89,32 @@ Residual note: retrieval ranking may favor denser older episodes over a
 short exact match — a Corti-side retrieval property, not a plugin
 behavior.
 
-## Session attribution — fixed 2026-10-01
+## Session attribution — fixed 2026-10-01 (twice)
 
-`memory_flush` already resolved the live session id, but `memory_add` still
-wrote under a fabricated per-day id (`dsh-tool-<date>`). Every manual memory
-of a day therefore landed in one synthetic conversation that no real session
-could ever recall. Both tools now share one `resolveSessionId(exec)`:
+`memory_flush` already resolved a live session id, but `memory_add` wrote
+under a fabricated per-day id (`dsh-tool-<date>`): every manual memory of a
+day landed in one synthetic conversation that no real session could recall.
+Both tools now share one `resolveSessionId(exec)`.
 
-1. the execution context's `session.id` (the real conversation),
-2. the last session seen by the capture hook,
-3. `dsh-session` only when neither exists.
+**The first attempt read the wrong field.** It looked for
+`exec.session.id`, but dsh hands a tool a `ToolRunContext` whose session
+hangs off the *agent* — `ToolRunContext.agent.session.id`
+(`packages/core/tools/lib/types/index.d.ts` → `ToolExecution.agent` →
+`Agent.session` → `Session.id`). The branch therefore never matched and every
+write fell through to the fallback. Worse, the first fallback was the last
+session the capture hook had seen, which after any `turn/end` is *another*
+conversation's id — silent misattribution rather than a missing id.
+
+The resolution order is now, most specific first:
+
+1. `exec.agent.session.id` — the real host contract,
+2. `exec.session.id` — legacy hosts and the plugin's own test harness,
+3. the last session the capture hook saw,
+4. `dsh-session`, reported on stderr because by definition no session can
+   ever recall such a write.
+
+The shipped harness asserts the real `ToolRunContext` shape, which is what
+caught the miss.
 
 ## Config
 

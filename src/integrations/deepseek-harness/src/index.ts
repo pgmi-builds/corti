@@ -426,6 +426,30 @@ interface BufferedTurn {
 
 const textOut = (value: any): TextBlock[] => [{ type: "text", text: String(value?.content ?? "") }];
 
+/**
+ * Model-safe one-liner for a failed call.
+ *
+ * The raw envelope can carry provider JSON — payment URLs, request ids,
+ * gateway prose in another language — and a model will relay it verbatim to
+ * the user without being asked. Classify the cases a caller can act on, log
+ * the full detail for the operator, and keep the model's copy short.
+ */
+function describeFailure(label: string, status: number, error: unknown): string {
+  const code =
+    typeof error === "object" && error !== null && "code" in error
+      ? String((error as { code?: unknown }).code ?? "")
+      : "";
+  console.error(`[corti-memory] ${label} failed:`, JSON.stringify(error));
+  if (status === 0) return `${label} could not reach the Corti server.`;
+  if (status === 503 || status === 504 || code === "EXTERNAL_SERVICE_UNAVAILABLE") {
+    return (
+      `${label} is temporarily unavailable — an upstream model provider is not responding. ` +
+      "Stored memories are intact; keyword recall still works."
+    );
+  }
+  return `${label} failed (HTTP ${status}${code ? ` ${code}` : ""}).`;
+}
+
 /* ---------- plugin ---------- */
 
 export async function apply(ctx: any, config: Config) {
@@ -464,17 +488,36 @@ export async function apply(ctx: any, config: Config) {
   /**
    * Resolve the calling agent's real session id.
    *
-   * dsh hands tools an execution context carrying `.session.id`; when it is
-   * absent (older hosts, tests) fall back to the last session the capture hook
-   * saw. Only when both are missing does a neutral placeholder apply — minting
-   * a per-day fake id (the previous behaviour) attributed manual writes to a
-   * conversation that never existed, so a day's `memory_add` calls piled into
-   * one synthetic session that no real session could ever recall.
+   * dsh hands a tool its ``ToolRunContext``, and the session hangs off the
+   * **agent**, not the context: ``ToolRunContext.agent.session.id`` (see
+   * ``packages/core/tools/lib/types/index.d.ts`` → ``ToolExecution.agent`` →
+   * ``Agent.session`` → ``Session.id``). Reading ``exec.session.id`` directly
+   * — as the first cut of this helper did — never matched, so every tool
+   * write fell through to the fallback.
+   *
+   * Fallback order, most-specific first:
+   *
+   *   1. ``exec.agent.session.id`` — the real host contract,
+   *   2. ``exec.session.id`` — legacy hosts and the plugin's own test harness,
+   *   3. the last session the capture hook saw,
+   *   4. ``dsh-session`` — an unattributable write, reported on stderr because
+   *      by definition no session can ever recall it.
+   *
+   * The order matters: (3) is *another* conversation's id once any session has
+   * ended a turn in this process, so using it silently misattributes the write
+   * instead of merely losing it.
    */
   const resolveSessionId = (exec: unknown): string => {
-    const execSession = (exec as { session?: { id?: unknown } } | undefined)?.session?.id;
-    if (typeof execSession === "string" && execSession !== "") return execSession;
-    return lastSeenSessionId ?? "dsh-session";
+    const ctx = exec as
+      | { session?: { id?: unknown }; agent?: { session?: { id?: unknown } } }
+      | undefined;
+    const fromAgent = ctx?.agent?.session?.id;
+    if (typeof fromAgent === "string" && fromAgent !== "") return fromAgent;
+    const direct = ctx?.session?.id;
+    if (typeof direct === "string" && direct !== "") return direct;
+    if (lastSeenSessionId) return lastSeenSessionId;
+    console.error("[corti-memory] no session id in the tool context; write is unattributable");
+    return "dsh-session";
   };
 
   // The client half ships its own Settings/General row, so suppress the
@@ -587,7 +630,7 @@ export async function apply(ctx: any, config: Config) {
       async execute(args) {
         if (!memoryEnabled()) return disabledResult();
         const res = await client.search(String(args.query), { topK: Number(args.top_k) || cfg.recallTopK });
-        if (!res.ok) return { content: `corti search failed: ${JSON.stringify(res.error)}` };
+        if (!res.ok) return { content: describeFailure("Corti search", res.status, res.error) };
         const body = renderFullEpisodes(res.data?.episodes ?? [], 6000);
         return { content: body || "(no memories found)" };
       },
@@ -619,7 +662,7 @@ export async function apply(ctx: any, config: Config) {
           { role: "user", content: `Please remember this: ${text}` },
           { role: "assistant", content: `Noted and stored: ${text}` },
         ]);
-        if (!res.ok) return { content: `corti add failed: ${JSON.stringify(res.error)}` };
+        if (!res.ok) return { content: describeFailure("Corti add", res.status, res.error) };
         await client.flush(sessionId);
         return { content: `Stored in persistent memory: ${text}` };
       },
@@ -641,7 +684,7 @@ export async function apply(ctx: any, config: Config) {
       async execute(args) {
         if (!memoryEnabled()) return disabledResult();
         const res = await client.recent(Number(args.limit) || 10);
-        if (!res.ok) return { content: `corti list failed: ${JSON.stringify(res.error)}` };
+        if (!res.ok) return { content: describeFailure("Corti list", res.status, res.error) };
         const eps = res.data?.episodes ?? res.data?.memories ?? res.data?.items ?? [];
         const body = renderFullEpisodes(eps, 6000);
         return { content: body || "(no memories yet)" };
@@ -661,7 +704,11 @@ export async function apply(ctx: any, config: Config) {
         if (!memoryEnabled()) return disabledResult();
         const sessionId = resolveSessionId(exec);
         const res = await client.flush(sessionId);
-        return { content: res.ok ? `flushed session ${sessionId}` : `flush failed: ${JSON.stringify(res.error)}` };
+        return {
+          content: res.ok
+            ? `flushed session ${sessionId}`
+            : describeFailure("Corti flush", res.status, res.error),
+        };
       },
     }),
   );
