@@ -22,6 +22,7 @@ already know what you want to do and need to know exactly how.
 | Doc | Purpose |
 |---|---|
 | [api.md](api.md) | HTTP API v1 reference — endpoints, request / response, error contracts |
+| [runtime-integration.md](runtime-integration.md) | Contract for an agent-runtime adapter — what the server owns vs what the plugin owns |
 | [knowledge.md](knowledge.md) | Knowledge base module — upload, search, taxonomy, storage layout |
 | [reflection.md](reflection.md) | Reflection — offline memory consolidation: enable, schedule, storage, triggering |
 | [cli.md](cli.md) | `corti` CLI subcommands + env var conventions |
