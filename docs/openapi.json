@@ -202,7 +202,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PrefetchResponse"
+                  "$ref": "#/components/schemas/SuccessEnvelope_PrefetchData_"
                 }
               }
             }
@@ -244,7 +244,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SessionStartResponse"
+                  "$ref": "#/components/schemas/SuccessEnvelope_SessionStartData_"
                 }
               }
             }
@@ -286,7 +286,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SessionEndResponse"
+                  "$ref": "#/components/schemas/SuccessEnvelope_SessionEndData_"
                 }
               }
             }
@@ -2225,6 +2225,53 @@
         ],
         "title": "MessageItemDTO"
       },
+      "PrefetchData": {
+        "properties": {
+          "skipped": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "trivial_prompt",
+                  "no_relevant_hits"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skipped"
+          },
+          "block": {
+            "type": "string",
+            "title": "Block",
+            "default": ""
+          },
+          "display": {
+            "type": "string",
+            "title": "Display",
+            "default": ""
+          },
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeHit"
+            },
+            "type": "array",
+            "title": "Hits"
+          },
+          "degraded": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Degraded"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "PrefetchData",
+        "description": "Payload of ``/prefetch``; the route wraps it in ``SuccessEnvelope``."
+      },
       "PrefetchRequest": {
         "properties": {
           "user_id": {
@@ -2306,60 +2353,6 @@
         ],
         "title": "PrefetchRequest",
         "description": "Per-turn recall: \"is anything from before relevant to this prompt?\"."
-      },
-      "PrefetchResponse": {
-        "properties": {
-          "request_id": {
-            "type": "string",
-            "title": "Request Id"
-          },
-          "skipped": {
-            "anyOf": [
-              {
-                "type": "string",
-                "enum": [
-                  "trivial_prompt",
-                  "no_relevant_hits"
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Skipped"
-          },
-          "block": {
-            "type": "string",
-            "title": "Block",
-            "default": ""
-          },
-          "display": {
-            "type": "string",
-            "title": "Display",
-            "default": ""
-          },
-          "hits": {
-            "items": {
-              "$ref": "#/components/schemas/RuntimeHit"
-            },
-            "type": "array",
-            "title": "Hits"
-          },
-          "degraded": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Degraded"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "request_id"
-        ],
-        "title": "PrefetchResponse",
-        "description": "``block`` is injected verbatim; ``display`` is the human one-liner."
       },
       "RuntimeHit": {
         "properties": {
@@ -2814,6 +2807,30 @@
         "title": "SearchResponse",
         "description": "Top-level response envelope."
       },
+      "SessionEndData": {
+        "properties": {
+          "stored": {
+            "type": "boolean",
+            "title": "Stored"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/SessionSummaryItem"
+          },
+          "display": {
+            "type": "string",
+            "title": "Display"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "stored",
+          "summary",
+          "display"
+        ],
+        "title": "SessionEndData",
+        "description": "Payload of ``/session/end``; wrapped in ``SuccessEnvelope``."
+      },
       "SessionEndRequest": {
         "properties": {
           "user_id": {
@@ -2921,33 +2938,57 @@
         "title": "SessionEndRequest",
         "description": "The adapter parses its own transcript; the server keeps the record.\n\nTranscript shapes are host-specific (Claude Code's JSONL, DSH's turn\nevents), so extraction stays in the adapter. What the adapter must *not*\ndo is decide where the summary lives — that is server state, visible to\nevery runtime and to ``session/start``."
       },
-      "SessionEndResponse": {
+      "SessionStartData": {
         "properties": {
-          "request_id": {
+          "block": {
             "type": "string",
-            "title": "Request Id"
-          },
-          "stored": {
-            "type": "boolean",
-            "title": "Stored"
-          },
-          "summary": {
-            "$ref": "#/components/schemas/SessionSummaryItem"
+            "title": "Block",
+            "default": ""
           },
           "display": {
             "type": "string",
-            "title": "Display"
+            "title": "Display",
+            "default": ""
+          },
+          "catalog": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeHit"
+            },
+            "type": "array",
+            "title": "Catalog"
+          },
+          "total_episodes": {
+            "type": "integer",
+            "title": "Total Episodes",
+            "default": 0
+          },
+          "last_session": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionSummaryItem"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "profile_line": {
+            "type": "string",
+            "title": "Profile Line",
+            "default": ""
+          },
+          "degraded": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Degraded"
           }
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "request_id",
-          "stored",
-          "summary",
-          "display"
-        ],
-        "title": "SessionEndResponse"
+        "title": "SessionStartData",
+        "description": "Payload of ``/session/start``; wrapped in ``SuccessEnvelope``."
       },
       "SessionStartRequest": {
         "properties": {
@@ -3028,64 +3069,6 @@
         ],
         "title": "SessionStartRequest",
         "description": "Once-per-session breadth: profile, last session, recent catalog."
-      },
-      "SessionStartResponse": {
-        "properties": {
-          "request_id": {
-            "type": "string",
-            "title": "Request Id"
-          },
-          "block": {
-            "type": "string",
-            "title": "Block",
-            "default": ""
-          },
-          "display": {
-            "type": "string",
-            "title": "Display",
-            "default": ""
-          },
-          "catalog": {
-            "items": {
-              "$ref": "#/components/schemas/RuntimeHit"
-            },
-            "type": "array",
-            "title": "Catalog"
-          },
-          "total_episodes": {
-            "type": "integer",
-            "title": "Total Episodes",
-            "default": 0
-          },
-          "last_session": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/SessionSummaryItem"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "profile_line": {
-            "type": "string",
-            "title": "Profile Line",
-            "default": ""
-          },
-          "degraded": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Degraded"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "request_id"
-        ],
-        "title": "SessionStartResponse"
       },
       "SessionSummaryItem": {
         "properties": {
@@ -3314,6 +3297,57 @@
           "data"
         ],
         "title": "SuccessEnvelope[KnowledgeSearchResponse]"
+      },
+      "SuccessEnvelope_PrefetchData_": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "data": {
+            "$ref": "#/components/schemas/PrefetchData"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "data"
+        ],
+        "title": "SuccessEnvelope[PrefetchData]"
+      },
+      "SuccessEnvelope_SessionEndData_": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "data": {
+            "$ref": "#/components/schemas/SessionEndData"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "data"
+        ],
+        "title": "SuccessEnvelope[SessionEndData]"
+      },
+      "SuccessEnvelope_SessionStartData_": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "data": {
+            "$ref": "#/components/schemas/SessionStartData"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "data"
+        ],
+        "title": "SuccessEnvelope[SessionStartData]"
       },
       "SuccessEnvelope_TopicDetailResponse_": {
         "properties": {

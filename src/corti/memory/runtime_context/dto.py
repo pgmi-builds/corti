@@ -128,12 +128,10 @@ class PrefetchRequest(_ScopedRequest):
         return v.strip()
 
 
-class PrefetchResponse(BaseModel):
-    """``block`` is injected verbatim; ``display`` is the human one-liner."""
+class PrefetchData(BaseModel):
+    """Payload of ``/prefetch``; the route wraps it in ``SuccessEnvelope``."""
 
     model_config = ConfigDict(extra="forbid")
-
-    request_id: str
     skipped: Literal["trivial_prompt", "no_relevant_hits"] | None = None
     """Non-``None`` means the adapter injects nothing. Skipping is a normal
     outcome, not an error — the adapter must treat it as such."""
@@ -159,10 +157,10 @@ class SessionStartRequest(_ScopedRequest):
     include_profile: bool = True
 
 
-class SessionStartResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class SessionStartData(BaseModel):
+    """Payload of ``/session/start``; wrapped in ``SuccessEnvelope``."""
 
-    request_id: str
+    model_config = ConfigDict(extra="forbid")
     block: str = ""
     display: str = ""
     catalog: list[RuntimeHit] = Field(default_factory=list)
@@ -198,10 +196,10 @@ class SessionEndRequest(_ScopedRequest):
     _coerce_ended = field_validator("ended_at")(_as_utc)
 
 
-class SessionEndResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class SessionEndData(BaseModel):
+    """Payload of ``/session/end``; wrapped in ``SuccessEnvelope``."""
 
-    request_id: str
+    model_config = ConfigDict(extra="forbid")
     stored: bool
     summary: SessionSummaryItem
     display: str

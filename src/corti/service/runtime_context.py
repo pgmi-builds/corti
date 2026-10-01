@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from corti.component.utils.datetime import get_utc_now
 from corti.core.observability.logging import get_logger
-from corti.core.observability.tracing import gen_request_id
 from corti.infra.persistence.sqlite import (
     SessionSummary,
     get_latest_session_summary,
@@ -23,13 +22,13 @@ from corti.infra.persistence.sqlite import (
 )
 from corti.memory.get import GetEpisodeItem, GetMemoryType, GetProfileItem, GetRequest
 from corti.memory.runtime_context import (
+    PrefetchData,
     PrefetchRequest,
-    PrefetchResponse,
     RuntimeHit,
+    SessionEndData,
     SessionEndRequest,
-    SessionEndResponse,
+    SessionStartData,
     SessionStartRequest,
-    SessionStartResponse,
     SessionSummaryItem,
     is_trivial_prompt,
     render_prefetch_block,
@@ -56,17 +55,16 @@ _PROFILE_KEYS = ("name", "summary", "bio", "description", "title")
 # ── prefetch ─────────────────────────────────────────────────────────────
 
 
-async def prefetch(req: PrefetchRequest) -> PrefetchResponse:
+async def prefetch(req: PrefetchRequest) -> PrefetchData:
     """Recall for one user turn, rendered for injection.
 
     Trivial prompts short-circuit *here* rather than in each adapter: the
     rule is a product decision, and a runtime that forgets to apply it just
     pays for a pointless search instead of injecting noise.
     """
-    request_id = gen_request_id()
 
     if is_trivial_prompt(req.query):
-        return PrefetchResponse(request_id=request_id, skipped="trivial_prompt")
+        return PrefetchData(skipped="trivial_prompt")
 
     response = await _search_memory(
         SearchRequest(
@@ -85,8 +83,7 @@ async def prefetch(req: PrefetchRequest) -> PrefetchResponse:
     hits = [h for h in scored if h.score >= req.min_score][: req.top_k]
 
     if not hits:
-        return PrefetchResponse(
-            request_id=request_id,
+        return PrefetchData(
             skipped="no_relevant_hits",
             degraded=degraded,
         )
@@ -106,8 +103,7 @@ async def prefetch(req: PrefetchRequest) -> PrefetchResponse:
     if head:
         block = f"{head}\n{block}" if block else head
 
-    return PrefetchResponse(
-        request_id=request_id,
+    return PrefetchData(
         block=block,
         display=render_prefetch_display(hits),
         hits=hits,
@@ -118,9 +114,8 @@ async def prefetch(req: PrefetchRequest) -> PrefetchResponse:
 # ── session/start ────────────────────────────────────────────────────────
 
 
-async def session_start(req: SessionStartRequest) -> SessionStartResponse:
+async def session_start(req: SessionStartRequest) -> SessionStartData:
     """Breadth for a fresh session: profile, last session, recent catalog."""
-    request_id = gen_request_id()
 
     window, total = await _recent_episodes(req)
 
@@ -150,8 +145,7 @@ async def session_start(req: SessionStartRequest) -> SessionStartResponse:
         sampled=sampled,
         max_chars=req.max_chars,
     )
-    return SessionStartResponse(
-        request_id=request_id,
+    return SessionStartData(
         block=block,
         display=render_session_start_display(catalog=catalog, last_session=last),
         catalog=catalog,
@@ -164,14 +158,13 @@ async def session_start(req: SessionStartRequest) -> SessionStartResponse:
 # ── session/end ──────────────────────────────────────────────────────────
 
 
-async def session_end(req: SessionEndRequest) -> SessionEndResponse:
+async def session_end(req: SessionEndRequest) -> SessionEndData:
     """Record the finished session so *any* runtime can read it later.
 
     Transcript parsing stays in the adapter (transcript shapes are
     host-specific). Where the summary is *kept* is server state — that is
     what makes ``session/start`` work identically in every runtime.
     """
-    request_id = gen_request_id()
     now = get_utc_now()
     fields: dict[str, object] = {
         "app_id": req.app_id,
@@ -189,8 +182,7 @@ async def session_end(req: SessionEndRequest) -> SessionEndResponse:
     row = SessionSummary(**fields)
     await upsert_session_summary(row)
     item = _summary_item(row)
-    return SessionEndResponse(
-        request_id=request_id,
+    return SessionEndData(
         stored=True,
         summary=item,
         display=render_session_end_display(item),

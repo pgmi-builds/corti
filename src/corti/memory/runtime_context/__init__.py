@@ -9,24 +9,24 @@ per-runtime adapters stay transport-only.
 External usage:
     from corti.memory.runtime_context import (
         PrefetchRequest,
-        PrefetchResponse,
+        PrefetchData,
         SessionEndRequest,
-        SessionEndResponse,
+        SessionEndData,
         SessionStartRequest,
-        SessionStartResponse,
+        SessionStartData,
         is_trivial_prompt,
         sample_random,
         truncate_block,
     )
 """
 
+from .dto import PrefetchData as PrefetchData
 from .dto import PrefetchRequest as PrefetchRequest
-from .dto import PrefetchResponse as PrefetchResponse
 from .dto import RuntimeHit as RuntimeHit
+from .dto import SessionEndData as SessionEndData
 from .dto import SessionEndRequest as SessionEndRequest
-from .dto import SessionEndResponse as SessionEndResponse
+from .dto import SessionStartData as SessionStartData
 from .dto import SessionStartRequest as SessionStartRequest
-from .dto import SessionStartResponse as SessionStartResponse
 from .dto import SessionSummaryItem as SessionSummaryItem
 from .policy import DEFAULT_INJECT_TOP_K as DEFAULT_INJECT_TOP_K
 from .policy import DEFAULT_MAX_INJECT_CHARS as DEFAULT_MAX_INJECT_CHARS
@@ -44,13 +44,13 @@ __all__ = [
     "DEFAULT_INJECT_TOP_K",
     "DEFAULT_MAX_INJECT_CHARS",
     "DEFAULT_MIN_SCORE",
+    "PrefetchData",
     "PrefetchRequest",
-    "PrefetchResponse",
     "RuntimeHit",
+    "SessionEndData",
     "SessionEndRequest",
-    "SessionEndResponse",
+    "SessionStartData",
     "SessionStartRequest",
-    "SessionStartResponse",
     "SessionSummaryItem",
     "is_trivial_prompt",
     "render_prefetch_block",

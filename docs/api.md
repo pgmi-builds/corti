@@ -1114,7 +1114,9 @@ protocol and the wire. Rationale and migration history:
 [adr/0004-runtime-interop-endpoints.md](adr/0004-runtime-interop-endpoints.md).
 
 All three share the request scope `user_id` (required), `app_id`,
-`project_id`, `agent_id`, `session_id`.
+`project_id`, `agent_id`, `session_id` — and, like every other 200 in this
+API, they wrap their payload in the standard `{request_id, data}` envelope.
+The field tables below describe `data`.
 
 #### POST /api/v1/memory/session/start
 
