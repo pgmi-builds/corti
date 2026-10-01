@@ -66,7 +66,7 @@ class PgEpisodeRecaller:
         sql = (
             "SELECT *, 1 - (vector <=> %s::vector) AS _score "
             "FROM episode "
-            f"WHERE ({where}) "
+            f"WHERE vector IS NOT NULL AND ({where}) "
             "ORDER BY vector <=> %s::vector LIMIT %s"
         )
         async with pool.connection() as conn:
@@ -175,7 +175,10 @@ class PgEpisodeRecaller:
 
 def _row_to_candidate(row, *, source: str) -> Candidate:
     d = dict(row) if not isinstance(row, dict) else row
-    score = float(d.pop("_score", 0.0))
+    # A NULL here means the row has no vector yet (see the
+    # ``IS NOT NULL`` guard in dense_recall). Treat it as a zero
+    # score rather than letting float(None) fail the request.
+    score = float(d.pop("_score", 0.0) or 0.0)
     for k in ("vector", "subject_vector"):
         d.pop(k, None)
     # Strip tsvector columns from metadata

@@ -57,7 +57,7 @@ class PgAtomicFactRecaller:
         sql = (
             "SELECT *, 1 - (vector <=> %s::vector) AS _score "
             "FROM atomic_fact "
-            f"WHERE ({where}) "
+            f"WHERE vector IS NOT NULL AND ({where}) "
             "ORDER BY vector <=> %s::vector LIMIT %s"
         )
         async with pool.connection() as conn:
@@ -175,7 +175,7 @@ class PgAtomicFactRecaller:
             sql = (
                 "SELECT *, 1 - (vector <=> %s::vector) AS _score "
                 "FROM atomic_fact "
-                f"WHERE {full_where} "
+                f"WHERE vector IS NOT NULL AND {full_where} "
                 "ORDER BY vector <=> %s::vector LIMIT %s"
             )
             params = [vec_str, *params, vec_str, limit]
@@ -203,7 +203,10 @@ def _build_parent_to_episode_map(
 
 def _row_to_candidate(row, *, source: str) -> Candidate:
     d = dict(row) if not isinstance(row, dict) else row
-    score = float(d.pop("_score", 0.0))
+    # A NULL here means the row has no vector yet (see the
+    # ``IS NOT NULL`` guard in dense_recall). Treat it as a zero
+    # score rather than letting float(None) fail the request.
+    score = float(d.pop("_score", 0.0) or 0.0)
     for k in ("vector", "subject_vector"):
         d.pop(k, None)
     for k in list(d.keys()):
