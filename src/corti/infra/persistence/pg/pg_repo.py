@@ -463,7 +463,10 @@ class PgRepoBase:
             sql = (
                 f"SELECT *, 1 - (vector <=> %s::vector) AS _score "
                 f"FROM {self.table_name} "
-                f"WHERE {where_clause} "
+                # A row with a NULL vector has no cosine distance; without
+                # this it contributes a NULL score and the caller has to
+                # defend against it.
+                f"WHERE vector IS NOT NULL AND ({where_clause}) "
                 f"ORDER BY vector <=> %s::vector "
                 f"LIMIT {limit}"
             )

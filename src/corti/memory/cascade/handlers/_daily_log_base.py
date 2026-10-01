@@ -17,9 +17,16 @@ embed call.
 
 Embedding is **best-effort**. When the provider is unreachable the row is
 still written, with ``vector = NULL``: the memory stays readable and
-BM25-searchable, and a later pass backfills the vector. Failing the whole
-file instead would lose the record *and* — because the row then never
-reaches a terminal state — re-run the handler on every sweep.
+BM25-searchable. Failing the whole file instead would lose the record *and*
+— because the row then never reaches a terminal state — re-run the handler
+on every sweep.
+
+There is deliberately no scheduled sweep for vectorless rows. Embedding is
+triggered by a memory arriving; re-scanning the corpus on every write to
+find a backlog would cost provider calls for no new memory. A row is
+re-embedded only when its own file is reprocessed for some other reason
+(:meth:`_diff_entries` re-emits it whenever that happens), and a backlog is
+cleared on demand with ``src/scripts/backfill_vectors.py``.
 
 Subclasses bind their ``kind`` / ``db_repo`` / ``content_change_keys``
 as ClassVars and override :meth:`_embed_texts` + :meth:`_build_row` to do
@@ -169,9 +176,11 @@ class BaseDailyLogHandler(Handler):
 
         ``existing`` maps ``entry_id -> (content_sha256, has_vector)``. A row
         is skipped only when its content hash is unchanged **and** it already
-        carries a vector — a row whose vector is still ``NULL`` (written while
-        the embedder was down) is re-emitted so the backfill happens on the
-        next pass that can reach the provider.
+        carries a vector, so a row left ``NULL`` (written while the embedder
+        was down) rides along free the next time this file is processed for
+        any reason. This is not a backfill mechanism: files that are never
+        reprocessed keep their NULLs, and ``backfill_vectors.py`` exists for
+        that.
         """
         to_build: list[ParsedEntry] = []
         skipped = 0
@@ -261,6 +270,17 @@ class BaseDailyLogHandler(Handler):
                 embedded = [None] * len(flat)
             else:
                 _embed_guard.record_success()
+
+        # A provider that answers short (or long) must not take the file down:
+        # pad with ``None`` so the missing slots simply stay unvectorised.
+        if len(embedded) != len(flat):
+            logger.warning(
+                "cascade_embedding_batch_size_mismatch",
+                md_path=md_path,
+                expected=len(flat),
+                got=len(embedded),
+            )
+            embedded = (embedded + [None] * len(flat))[: len(flat)]
 
         grouped: list[list[list[float] | None]] = []
         cursor = 0
