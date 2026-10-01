@@ -59,30 +59,72 @@ export class CortiClient {
         }
     }
     /**
-     * POST /api/v1/memory/search.
+     * POST /api/v1/memory/search — recall for the model-facing tool.
      *
-     * Recalls with the requested method and, when the server reports the vector
-     * leg unavailable (503), retries once as `keyword`. The server degrades
-     * internally too, but an older deployment will not — and a lexical answer
-     * beats no answer for an agent that has nothing else to go on. A request
-     * that already asks for `keyword` is never retried, so this cannot loop.
+     * Degradation is the server's job: a leg that is unavailable is substituted
+     * server-side and reported in `degraded[]`, so this client never re-issues a
+     * request as a different method.
      */
     async search(query, opts = {}) {
-        const method = opts.method ?? "hybrid";
-        const topK = opts.topK ?? 8;
-        const first = await this.post("/api/v1/memory/search", {
-            query,
-            method,
-            top_k: topK,
-            ...this.scope(),
-        });
-        if (first.ok || method === "keyword" || first.status !== 503)
-            return first;
         return this.post("/api/v1/memory/search", {
             query,
-            method: "keyword",
-            top_k: topK,
+            method: opts.method ?? "hybrid",
+            top_k: opts.topK ?? 8,
             ...this.scope(),
+        });
+    }
+    /**
+     * POST /api/v1/memory/session/start — the once-per-session injected block.
+     *
+     * The server owns selection, ordering, truncation and the block text; the
+     * caller forwards scope plus host facts only. Options left undefined are
+     * dropped from the JSON body, so the server's own defaults decide.
+     */
+    async sessionStart(opts = {}) {
+        return this.post("/api/v1/memory/session/start", {
+            ...this.scope(),
+            agent_id: this.cfg.agentId,
+            session_id: opts.sessionId,
+            recency_window: opts.recencyWindow,
+            recency_sample: opts.recencySample,
+            recent_count: opts.recentCount,
+            max_chars: opts.maxChars,
+            include_profile: opts.includeProfile,
+        });
+    }
+    /**
+     * POST /api/v1/memory/prefetch — the per-turn recalled block.
+     *
+     * A non-null `skipped` in the response means "inject nothing"; that is a
+     * normal outcome, not an error.
+     */
+    async prefetch(opts) {
+        return this.post("/api/v1/memory/prefetch", {
+            query: opts.query,
+            method: opts.method,
+            top_k: opts.topK,
+            min_score: opts.minScore,
+            max_chars: opts.maxChars,
+            include_profile: opts.includeProfile,
+            session_id: opts.sessionId,
+            agent_id: this.cfg.agentId,
+            ...this.scope(),
+        });
+    }
+    /**
+     * POST /api/v1/memory/session/end — record a finished session so any
+     * runtime's `/session/start` can report it as "last session".
+     */
+    async sessionEnd(payload) {
+        return this.post("/api/v1/memory/session/end", {
+            ...this.scope(),
+            agent_id: this.cfg.agentId,
+            session_id: payload.sessionId,
+            first_prompt: payload.firstPrompt,
+            turn_count: payload.turnCount,
+            started_at: payload.startedAt,
+            ended_at: payload.endedAt,
+            reason: payload.reason,
         });
     }
     /** POST /api/v1/memory/get — recent memories, newest first (`page` is 1-based). */
