@@ -109,6 +109,11 @@ The new service recorded no worker failures in the later recovery observation
 window. Historical October 6-8 files were not being repeatedly reprocessed.
 No memories were deleted as part of this deployment.
 
+A subsequent full content-hash audit also found **0 content mismatches** in all
+three kinds, in addition to zero missing/orphan/duplicate entries. That snapshot
+had 6,730 episodes, 174,694 facts and 47,159 foresights; the additional 50 facts
+were normal incoming writes after the earlier alignment snapshot.
+
 ## Functional and cost verification
 
 - Health: HTTP 200.
@@ -127,7 +132,9 @@ No memories were deleted as part of this deployment.
 Deployment safety tests passed: source tampering detection, image-ID mismatch
 rejection, old-service recovery on backup failure, and private credential writes.
 Full `UV_PYTHON=3.12 make ci` passed lint, unit tests, integration tests, packaging,
-and package import smoke verification. The initial default Python 3.14 run found
+and package import smoke verification: **1,534 unit tests passed** (17 skipped),
+and **51 integration tests passed** (4 skipped, 6 deselected).
+The initial default Python 3.14 run found
 21 failures caused by the pre-existing jieba SyntaxWarning allowlist not matching
 Python 3.14's changed warning wording (1,513 tests passed). No application code
 or unrelated test configuration was changed to address that issue; the full gate

@@ -143,6 +143,11 @@ curl -fsSL https://raw.githubusercontent.com/pgmi-builds/corti/main/install.sh |
 
 ### 2. Start the Server
 
+For upgrades or transfers of an existing external-PG service, use the
+[verified local deployment workflow](docs/local-deployment.md). It builds committed
+source, pins the image ID, backs up external data, and verifies installed source.
+Copying code into a running container does not update its underlying image.
+
 ```bash
 docker run -d --name corti \
   -p 5473:5473 \
