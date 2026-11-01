@@ -37,7 +37,7 @@ Detailed: [docs/architecture.md](docs/architecture.md).
 
 ## Engineering practices
 
-- **Coding rules** auto-loaded from [.claude/rules/](.claude/rules/) (10 rules; the three always-loaded ones cover architecture / code-style / language-policy, the rest are path-scoped and load when Claude Code opens a matching file)
+- **Coding rules** in [.claude/rules/](.claude/rules/) (10 rules; the three always-loaded ones cover architecture / code-style / language-policy, the rest are path-scoped)
 - **Workflows** as slash commands in [.claude/skills/](.claude/skills/) — `/commit`, `/new-branch`, `/pr`
 - **Project-level decisions** in [docs/](docs/) (low-frequency, human-judgment-required)
 - **Language policy**: the project targets a global audience — docs and code are English; CJK appears only in test fixtures and locale-suffixed mirrors. Scanned by `make check-cjk`.
@@ -57,7 +57,7 @@ for the full branch workflow.
 ## GitHub sync guard
 
 When refreshing this repository from an internal source archive, preserve
-GitHub-only contributor and automation files. Do not overwrite `CLAUDE.md`,
+GitHub-only contributor and automation files. Do not overwrite `AGENTS.md`,
 `.claude/skills/*`, `legal/CONTRIBUTING.md`, or `.github/*` workflow/template files
 without following the GitHub sync guardrails.
 
@@ -67,11 +67,12 @@ without following the GitHub sync guardrails.
 Markdown (truth)  +  SQLite (state)  +  Postgres (vector + BM25 + scalar)
 ```
 
-- Memory root: `~/.corti/{agents,users,knowledge}/` (md files = single source of truth)
+- Memory root: `~/.corti/<app_id>/<project_id>/{users,agents,knowledge}/` (md files = single source of truth; the reserved id `default` materialises as `default_app` / `default_project`)
 - System DB: `~/.corti/.index/sqlite/system.db` (state + audit + queue + metadata)
 - Index: `~/.corti/.index/pg/` (rebuildable from md)
 
-Selection rationale: [docs/architecture.md](docs/architecture.md).
+Selection rationale: [docs/architecture.md](docs/architecture.md); full tree:
+[docs/storage_layout.md](docs/storage_layout.md).
 
 ## Source layout
 
@@ -85,6 +86,7 @@ Algorithm assets (prompts, extractors) are vendored under `src/everalgo/` — or
 |---|---|
 | Understand architecture | [docs/architecture.md](docs/architecture.md) |
 | Understand storage choice | [docs/architecture.md](docs/architecture.md) (storage section) |
+| Understand the on-disk tree | [docs/storage_layout.md](docs/storage_layout.md) |
 | Build, test, CI & conventions | [docs/engineering.md](docs/engineering.md) |
 | Add a new module | [.claude/rules/init-py-and-reexport.md](.claude/rules/init-py-and-reexport.md) |
 | Make a commit | use `/commit` |
